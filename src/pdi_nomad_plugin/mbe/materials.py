@@ -64,6 +64,8 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
                     'crystal_id',
                     'charge_id',
                     'polishing',
+                    'offcut_angle',
+                    'offcut_direction',
                     'lab_id',
                     'epi_ready',
                     'substrate_image',
@@ -121,6 +123,34 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
             component=ELNComponentEnum.EnumEditQuantity,
         ),
     )
+    surface_orientation_label = Quantity(
+        type=str,
+        description=(
+            'Compact surface orientation used for substrate catalogue '
+            'display and search.'
+        ),
+    )
+    offcut_angle = Quantity(
+        type=float,
+        unit='degree',
+        description='Nominal substrate offcut angle.',
+        a_eln=ELNAnnotation(
+            component='NumberEditQuantity',
+            label='Offcut angle',
+        ),
+    )
+    offcut_direction = Quantity(
+        type=str,
+        description='Crystallographic direction towards which the substrate is offcut.',
+        a_eln=ELNAnnotation(
+            component='StringEditQuantity',
+            label='Offcut direction',
+        ),
+    )
+    offcut_label = Quantity(
+        type=str,
+        description='Compact offcut description used for catalogue display and search.',
+    )
     description = Quantity(
         type=str,
         description='description',
@@ -140,6 +170,46 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
         super().normalize(archive, logger)
 
         logger.info('Running SubstrateMbe normalization')
+
+        # Initialize substrate status
+        if self.as_delivered is None:
+            self.as_delivered = True
+        if self.fresh is None:
+            self.fresh = False
+        if self.processed is None:
+            self.processed = False
+        if self.grown is None:
+            self.grown = False
+
+        # Build compact orientation and offcut labels for catalogue search/display.
+        if self.crystal_properties:
+            surface_orientation = getattr(
+                self.crystal_properties, 'surface_orientation', None
+            )
+            hkl = getattr(surface_orientation, 'hkl_reciprocal', None)
+            if hkl:
+                indices = [
+                    getattr(hkl, 'h_index', None),
+                    getattr(hkl, 'k_index', None),
+                    getattr(hkl, 'l_index', None),
+                ]
+                if all(index is not None for index in indices):
+                    formatted_indices = []
+                    for index in indices:
+                        value = float(index)
+                        if value.is_integer():
+                            formatted_indices.append(str(int(value)))
+                        else:
+                            formatted_indices.append(f'{value:g}')
+                    self.surface_orientation_label = f'({"".join(formatted_indices)})'
+
+        if self.offcut_angle is not None:
+            angle = self.offcut_angle
+            if hasattr(angle, 'magnitude'):
+                angle = angle.magnitude
+            self.offcut_label = f'{float(angle):g}°'
+        else:
+            self.offcut_label = None
 
         # -------------------------------------------------
         # Construct substrate ID if not explicitly given
@@ -333,6 +403,8 @@ class SubstrateBatchMbe(SubstrateMbe, EntryData):
                     'crystal_id',
                     'charge_id',
                     'polishing',
+                    'offcut_angle',
+                    'offcut_direction',
                     'lab_id',
                     'number_of_substrates',
                     'epi_ready',
