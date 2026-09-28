@@ -1,7 +1,90 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 app = FastAPI()
+
+
+class SubstrateIntakePreview(BaseModel):
+    supplier: str = ''
+    material: str = ''
+    crystal_id: str = ''
+    charge: str = ''
+    orientation: str = ''
+    offcut_angle: float | None = None
+    offcut_direction: str = ''
+    dimensions: str = ''
+    count: int = 1
+    notes: str = ''
+
+
+def parse_orientation(value: str):
+    cleaned = (
+        value.strip()
+        .replace('(', '')
+        .replace(')', '')
+        .replace('[', '')
+        .replace(']', '')
+        .replace(' ', '')
+        .replace(',', '')
+    )
+
+    if len(cleaned) != 3 or not cleaned.isdigit():
+        return None
+
+    return {
+        'h_index': int(cleaned[0]),
+        'k_index': int(cleaned[1]),
+        'l_index': int(cleaned[2]),
+    }
+
+
+@app.post('/api/preview')
+async def preview_substrate_batch(data: SubstrateIntakePreview):
+    orientation = parse_orientation(data.orientation)
+
+    archive_data = {
+        'm_def': 'pdi_nomad_plugin.mbe.materials.SubstrateBatchMbe',
+        'supplier': data.supplier or None,
+        'supplier_id': data.supplier or None,
+        'crystal_id': data.crystal_id or None,
+        'charge_id': data.charge or None,
+        'offcut_angle': data.offcut_angle,
+        'offcut_direction': data.offcut_direction or None,
+        'number_of_substrates': data.count,
+        'description': data.notes or None,
+        'trigger_create_substrate': True,
+    }
+
+    if data.material:
+        archive_data['components'] = [
+            {
+                'm_def': (
+                    'nomad.datamodel.metainfo.basesections.'
+                    'PureSubstanceComponent'
+                ),
+                'mass_fraction': 1,
+                'pure_substance': {
+                    'molecular_formula': data.material,
+                },
+            }
+        ]
+
+    if orientation is not None:
+        archive_data['crystal_properties'] = {
+            'surface_orientation': {
+                'hkl_reciprocal': orientation,
+            }
+        }
+
+    preview = {
+        'data': archive_data,
+        'pending_mapping': {
+            'dimensions': data.dimensions or None,
+        },
+    }
+
+    return preview
 
 
 @app.get('/', response_class=HTMLResponse)
@@ -212,18 +295,30 @@ async def index():
                     </div>
 
                     <div id="childPreview" class="preview"></div>
+                    <button
+                        class="secondary"
+                        type="button"
+                        style="margin-top:16px; width:100%;"
+                        onclick="previewArchive()"
+                    >
+                        Preview NOMAD archive
+                    </button>
+
+                    <pre id="archiveJson"
+                         style="margin-top:12px; padding:10px; background:#111; color:#eee; border-radius:6px; overflow:auto; max-height:360px; font-size:12px; white-space:pre-wrap;"
+                    >No archive preview yet.</pre>
 
                     <button
                         class="primary"
                         type="button"
-                        style="margin-top:16px; width:100%;"
+                        style="margin-top:12px; width:100%;"
                         disabled
                     >
                         Save to NOMAD
                     </button>
 
                     <p class="small">
-                        Save is disabled in this first UI prototype.
+                        Save is still disabled. The preview above shows the archive structure that would be written.
                     </p>
                 </div>
 
@@ -284,6 +379,51 @@ async def index():
                     .getElementById(id)
                     .addEventListener('input', updatePreview);
             });
+
+            async function previewArchive() {
+                const payload = {
+                    supplier: document.getElementById('supplier').value,
+                    material: document.getElementById('material').value,
+                    crystal_id: '',
+                    charge: document.getElementById('charge').value,
+                    orientation: document.getElementById('orientation').value,
+                    offcut_angle: document.getElementById('offcut_angle').value
+                        ? parseFloat(document.getElementById('offcut_angle').value)
+                        : null,
+                    offcut_direction:
+                        document.getElementById('offcut_direction').value,
+                    dimensions: document.getElementById('dimensions').value,
+                    count: parseInt(
+                        document.getElementById('count').value || '1',
+                        10
+                    ),
+                    notes: document.getElementById('notes').value
+                };
+
+                const output = document.getElementById('archiveJson');
+                output.textContent = 'Loading...';
+
+                try {
+                    const response = await fetch('api/preview', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(
+                            'Preview request failed: ' + response.status
+                        );
+                    }
+
+                    const data = await response.json();
+                    output.textContent = JSON.stringify(data, null, 2);
+                } catch (error) {
+                    output.textContent = 'Error: ' + error.message;
+                }
+            }
 
             updatePreview();
         </script>
