@@ -39,9 +39,53 @@ def parse_orientation(value: str):
     }
 
 
+def parse_dimensions(value: str):
+    cleaned = (
+        value.strip()
+        .lower()
+        .replace('×', 'x')
+        .replace(',', '.')
+        .replace('mm', '')
+        .replace(' ', '')
+    )
+
+    if not cleaned:
+        return None
+
+    parts = cleaned.split('x')
+    if len(parts) != 3:
+        return None
+
+    try:
+        width_mm, length_mm, height_mm = [float(part) for part in parts]
+    except ValueError:
+        return None
+
+    if width_mm <= 0 or length_mm <= 0 or height_mm <= 0:
+        return None
+
+    width_m = width_mm / 1000
+    length_m = length_mm / 1000
+    height_m = height_mm / 1000
+
+    if abs(width_mm - length_mm) < 1e-9:
+        return {
+            'm_def': 'nomad_material_processing.general.SquareCuboid',
+            'width': width_m,
+            'height': height_m,
+        }
+
+    return {
+        'm_def': 'nomad_material_processing.general.RectangleCuboid',
+        'width': width_m,
+        'length': length_m,
+        'height': height_m,
+    }
+
 @app.post('/api/preview')
 async def preview_substrate_batch(data: SubstrateIntakePreview):
     orientation = parse_orientation(data.orientation)
+    geometry = parse_dimensions(data.dimensions)
 
     archive_data = {
         'm_def': 'pdi_nomad_plugin.mbe.materials.SubstrateBatchMbe',
@@ -76,6 +120,9 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
                 'hkl_reciprocal': orientation,
             }
         }
+
+    if geometry is not None:
+        archive_data['geometry'] = geometry
 
     preview = {
         'data': archive_data,
