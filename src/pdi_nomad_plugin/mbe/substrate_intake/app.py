@@ -7,6 +7,7 @@ app = FastAPI()
 
 class SubstrateIntakePreview(BaseModel):
     supplier: str = ''
+    supplier_id: str = ''
     material: str = ''
     crystal_id: str = ''
     charge: str = ''
@@ -90,7 +91,7 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
     archive_data = {
         'm_def': 'pdi_nomad_plugin.mbe.materials.SubstrateBatchMbe',
         'supplier': data.supplier or None,
-        'supplier_id': data.supplier or None,
+        'supplier_id': data.supplier_id or None,
         'crystal_id': data.crystal_id or None,
         'charge_id': data.charge or None,
         'offcut_angle': data.offcut_angle,
@@ -297,8 +298,14 @@ async def index():
                     <label for="supplier">Supplier</label>
                     <input id="supplier" placeholder="e.g. CTC">
 
+                    <label for="supplier_id">Supplier ID</label>
+                    <input id="supplier_id" placeholder="e.g. CTC">
+
                     <label for="material">Material / Crystal</label>
                     <input id="material" placeholder="e.g. SrTiO3">
+
+                    <label for="crystal_id">Crystal ID</label>
+                    <input id="crystal_id" placeholder="manufacturer crystal / boule ID">
 
                     <label for="orientation">Orientation</label>
                     <input id="orientation" placeholder="e.g. (001)">
@@ -380,11 +387,11 @@ async def index():
             }
 
             function updatePreview() {
-                const supplier = cleanPart(
-                    document.getElementById('supplier').value
+                const supplierId = cleanPart(
+                    document.getElementById('supplier_id').value
                 );
-                const material = cleanPart(
-                    document.getElementById('material').value
+                const crystalId = cleanPart(
+                    document.getElementById('crystal_id').value
                 );
                 const charge = cleanPart(
                     document.getElementById('charge').value
@@ -400,7 +407,7 @@ async def index():
                     count = 0;
                 }
 
-                const parts = [supplier, material, charge].filter(Boolean);
+                const parts = [supplierId, crystalId, charge].filter(Boolean);
                 const batchName = parts.length
                     ? parts.join('_')
                     : 'SubstrateBatchMbe';
@@ -418,7 +425,9 @@ async def index():
 
             [
                 'supplier',
+                'supplier_id',
                 'material',
+                'crystal_id',
                 'charge',
                 'count'
             ].forEach(function(id) {
@@ -430,8 +439,9 @@ async def index():
             async function previewArchive() {
                 const payload = {
                     supplier: document.getElementById('supplier').value,
+                    supplier_id: document.getElementById('supplier_id').value,
                     material: document.getElementById('material').value,
-                    crystal_id: '',
+                    crystal_id: document.getElementById('crystal_id').value,
                     charge: document.getElementById('charge').value,
                     orientation: document.getElementById('orientation').value,
                     offcut_angle: document.getElementById('offcut_angle').value
