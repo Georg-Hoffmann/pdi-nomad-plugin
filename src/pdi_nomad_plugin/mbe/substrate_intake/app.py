@@ -371,22 +371,35 @@ async def index():
                     >No archive preview yet.</pre>
 
                     <button
+                        id="saveButton"
                         class="primary"
                         type="button"
                         style="margin-top:12px; width:100%;"
+                        onclick="saveToNomad()"
                         disabled
                     >
                         Save to NOMAD
                     </button>
 
-                    <p class="small">
-                        Save is still disabled. The preview above shows the archive structure that would be written.
+                    <p id="saveStatus" class="small">
+                        Select a target upload to enable saving.
                     </p>
                 </div>
 
             </div>
         </div>
         <script>
+            function nomadApiBase() {
+                const marker = '/gui/';
+                const pathname = window.location.pathname;
+                const index = pathname.indexOf(marker);
+
+                const deploymentBase =
+                    index >= 0 ? pathname.slice(0, index) : '';
+
+                return deploymentBase + '/api/v1';
+            }
+
             function cleanPart(value) {
                 return value
                     .trim()
@@ -444,8 +457,8 @@ async def index():
                     .addEventListener('input', updatePreview);
             });
 
-            async function previewArchive() {
-                const payload = {
+            function buildPayload() {
+                return {
                     supplier: document.getElementById('supplier').value,
                     supplier_id: document.getElementById('supplier_id').value,
                     material: document.getElementById('material').value,
@@ -464,6 +477,10 @@ async def index():
                     ),
                     notes: document.getElementById('notes').value
                 };
+            }
+
+            async function previewArchive() {
+                const payload = buildPayload();
 
                 const output = document.getElementById('archiveJson');
                 output.textContent = 'Loading...';
@@ -490,6 +507,121 @@ async def index():
                 }
             }
 
+            async function saveToNomad() {
+                const uploadId =
+                    document.getElementById('targetUpload').value;
+                const saveButton =
+                    document.getElementById('saveButton');
+                const saveStatus =
+                    document.getElementById('saveStatus');
+
+                if (!uploadId) {
+                    saveStatus.textContent =
+                        'Please select a target upload.';
+                    return;
+                }
+
+                const payload = buildPayload();
+
+                const parts = [
+                    cleanPart(payload.supplier_id),
+                    cleanPart(payload.crystal_id),
+                    cleanPart(payload.charge)
+                ].filter(Boolean);
+
+                if (parts.length !== 3) {
+                    saveStatus.textContent =
+                        'Supplier ID, Crystal ID and Charge / Batch ID are required.';
+                    return;
+                }
+
+                if (!Number.isInteger(payload.count) || payload.count < 1) {
+                    saveStatus.textContent =
+                        'Number of substrates must be at least 1.';
+                    return;
+                }
+
+                saveButton.disabled = true;
+                saveStatus.textContent = 'Preparing archive...';
+
+                try {
+                    const previewResponse = await fetch('api/preview', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!previewResponse.ok) {
+                        throw new Error(
+                            'Archive generation failed: ' +
+                            previewResponse.status
+                        );
+                    }
+
+                    const preview = await previewResponse.json();
+
+                    const filename =
+                        parts.join('_') + '.archive.yaml';
+
+                    const params = new URLSearchParams();
+                    params.append('file_name', filename);
+                    params.append('overwrite_if_exists', 'false');
+                    params.append('trigger_processing', 'true');
+
+                    saveStatus.textContent =
+                        'Uploading ' + filename + '...';
+
+                    const response = await fetch(
+                        nomadApiBase() + '/uploads/' +
+                        encodeURIComponent(uploadId) +
+                        '/raw/?' +
+                        params.toString(),
+                        {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(
+                                {data: preview.data},
+                                null,
+                                2
+                            )
+                        }
+                    );
+
+                    if (!response.ok) {
+                        let detail = '';
+                        try {
+                            const errorData = await response.json();
+                            detail =
+                                errorData.detail
+                                    ? ': ' + errorData.detail
+                                    : '';
+                        } catch (_) {
+                        }
+
+                        throw new Error(
+                            'Save failed (' +
+                            response.status +
+                            ')' +
+                            detail
+                        );
+                    }
+
+                    saveStatus.textContent =
+                        'Saved: ' + filename +
+                        '. NOMAD processing has been triggered.';
+                } catch (error) {
+                    saveStatus.textContent =
+                        'Error: ' + error.message;
+                } finally {
+                    saveButton.disabled =
+                        !document.getElementById('targetUpload').value;
+                }
+            }
+
             async function loadUploads() {
                 const select = document.getElementById('targetUpload');
                 const status = document.getElementById('uploadStatus');
@@ -506,7 +638,7 @@ async def index():
 
                 try {
                     const response = await fetch(
-                        '/api/v1/uploads?' + params.toString()
+                        nomadApiBase() + '/uploads?' + params.toString()
                     );
 
                     if (!response.ok) {
@@ -558,6 +690,18 @@ async def index():
                         'Error: ' + error.message;
                 }
             }
+
+            document
+                .getElementById('targetUpload')
+                .addEventListener('change', function() {
+                    const hasUpload = Boolean(this.value);
+                    document.getElementById('saveButton').disabled =
+                        !hasUpload;
+                    document.getElementById('saveStatus').textContent =
+                        hasUpload
+                            ? 'Ready to save to the selected upload.'
+                            : 'Select a target upload to enable saving.';
+                });
 
             updatePreview();
             loadUploads();
