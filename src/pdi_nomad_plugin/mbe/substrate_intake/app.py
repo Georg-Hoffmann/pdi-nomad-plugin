@@ -189,7 +189,7 @@ async def index():
                 font-weight: bold;
             }
 
-            input, textarea {
+            input, textarea, select {
                 width: 100%;
                 box-sizing: border-box;
                 padding: 8px 10px;
@@ -339,6 +339,14 @@ async def index():
                 <div class="card">
                     <h2>3. Archive preview</h2>
 
+                    <label for="targetUpload">Target upload</label>
+                    <select id="targetUpload">
+                        <option value="">Loading uploads...</option>
+                    </select>
+                    <p id="uploadStatus" class="small">
+                        Loading writable NOMAD uploads...
+                    </p>
+
                     <div class="summary">
                         <strong>Batch entry:</strong><br>
                         <span id="batchPreview">SubstrateBatchMbe</span>
@@ -482,7 +490,77 @@ async def index():
                 }
             }
 
+            async function loadUploads() {
+                const select = document.getElementById('targetUpload');
+                const status = document.getElementById('uploadStatus');
+
+                select.innerHTML =
+                    '<option value="">Loading uploads...</option>';
+                status.textContent =
+                    'Loading writable NOMAD uploads...';
+
+                const params = new URLSearchParams();
+                params.append('roles', 'main_author');
+                params.append('roles', 'coauthor');
+                params.append('page_size', '100');
+
+                try {
+                    const response = await fetch(
+                        '/api/v1/uploads?' + params.toString()
+                    );
+
+                    if (!response.ok) {
+                        throw new Error(
+                            'Upload request failed: ' + response.status
+                        );
+                    }
+
+                    const result = await response.json();
+
+                    const uploads = (result.data || []).filter(
+                        function(upload) {
+                            return !upload.published;
+                        }
+                    );
+
+                    select.innerHTML =
+                        '<option value="">Select target upload...</option>';
+
+                    uploads.forEach(function(upload) {
+                        const option = document.createElement('option');
+                        option.value = upload.upload_id;
+
+                        const name =
+                            upload.upload_name || 'Unnamed upload';
+                        const entries =
+                            upload.entries !== undefined
+                                ? upload.entries
+                                : '?';
+
+                        option.textContent =
+                            name +
+                            ' — ' +
+                            upload.upload_id +
+                            ' (' +
+                            entries +
+                            ' entries)';
+
+                        select.appendChild(option);
+                    });
+
+                    status.textContent =
+                        uploads.length +
+                        ' writable unpublished upload(s) available.';
+                } catch (error) {
+                    select.innerHTML =
+                        '<option value="">Could not load uploads</option>';
+                    status.textContent =
+                        'Error: ' + error.message;
+                }
+            }
+
             updatePreview();
+            loadUploads();
         </script>
     </body>
     </html>
