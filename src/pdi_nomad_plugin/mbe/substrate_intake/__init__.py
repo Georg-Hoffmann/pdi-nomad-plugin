@@ -1,4 +1,4 @@
-﻿from nomad.config.models.plugins import DashboardEntryPoint
+from nomad.config.models.plugins import DashboardEntryPoint
 
 
 class SubstrateIntakeDashboardEntryPoint(DashboardEntryPoint):

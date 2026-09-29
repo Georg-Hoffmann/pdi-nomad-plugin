@@ -5,6 +5,11 @@ from pydantic import BaseModel
 app = FastAPI()
 
 
+ORIENTATION_INDEX_COUNT = 3
+DIMENSION_COUNT = 3
+GEOMETRY_EQUALITY_TOLERANCE = 1e-9
+
+
 class SubstrateIntakePreview(BaseModel):
     supplier: str = ''
     supplier_id: str = ''
@@ -30,7 +35,7 @@ def parse_orientation(value: str):
         .replace(',', '')
     )
 
-    if len(cleaned) != 3 or not cleaned.isdigit():
+    if len(cleaned) != ORIENTATION_INDEX_COUNT or not cleaned.isdigit():
         return None
 
     return {
@@ -54,7 +59,7 @@ def parse_dimensions(value: str):
         return None
 
     parts = cleaned.split('x')
-    if len(parts) != 3:
+    if len(parts) != DIMENSION_COUNT:
         return None
 
     try:
@@ -69,7 +74,7 @@ def parse_dimensions(value: str):
     length_m = length_mm / 1000
     height_m = height_mm / 1000
 
-    if abs(width_mm - length_mm) < 1e-9:
+    if abs(width_mm - length_mm) < GEOMETRY_EQUALITY_TOLERANCE:
         return {
             'm_def': 'nomad_material_processing.general.SquareCuboid',
             'width': width_m,
@@ -82,6 +87,7 @@ def parse_dimensions(value: str):
         'length': length_m,
         'height': height_m,
     }
+
 
 @app.post('/api/preview')
 async def preview_substrate_batch(data: SubstrateIntakePreview):
@@ -106,8 +112,7 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
         archive_data['components'] = [
             {
                 'm_def': (
-                    'nomad.datamodel.metainfo.basesections.'
-                    'PureSubstanceComponent'
+                    'nomad.datamodel.metainfo.basesections.PureSubstanceComponent'
                 ),
                 'mass_fraction': 1,
                 'pure_substance': {
@@ -268,7 +273,10 @@ async def index():
     <body>
         <div class="page">
             <h1>Substrate Intake</h1>
-            <p>Create a substrate batch and preview the individual substrate entries.</p>
+            <p>
+                Create a substrate batch and preview the individual
+                substrate entries.
+            </p>
 
             <div class="layout">
 
@@ -306,7 +314,10 @@ async def index():
                     <input id="material" placeholder="e.g. SrTiO3">
 
                     <label for="crystal_id">Crystal ID</label>
-                    <input id="crystal_id" placeholder="manufacturer crystal / boule ID">
+                    <input
+                        id="crystal_id"
+                        placeholder="manufacturer crystal / boule ID"
+                    >
 
                     <label for="orientation">Orientation</label>
                     <input id="orientation" placeholder="e.g. (001)">
@@ -367,8 +378,19 @@ async def index():
                         Preview NOMAD archive
                     </button>
 
-                    <pre id="archiveJson"
-                         style="margin-top:12px; padding:10px; background:#111; color:#eee; border-radius:6px; overflow:auto; max-height:360px; font-size:12px; white-space:pre-wrap;"
+                    <pre
+                        id="archiveJson"
+                        style="
+                            margin-top:12px;
+                            padding:10px;
+                            background:#111;
+                            color:#eee;
+                            border-radius:6px;
+                            overflow:auto;
+                            max-height:360px;
+                            font-size:12px;
+                            white-space:pre-wrap;
+                        "
                     >No archive preview yet.</pre>
 
                     <button

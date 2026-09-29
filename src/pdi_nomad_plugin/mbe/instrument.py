@@ -1,4 +1,4 @@
-﻿import plotly.graph_objects as go
+import plotly.graph_objects as go
 from nomad.datamodel.data import ArchiveSection, EntryData
 from nomad.datamodel.hdf5 import HDF5Reference
 from nomad.datamodel.metainfo.annotations import (

@@ -1,0 +1,417 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>New MBE Experiment</title>
+
+    <link rel="stylesheet" href="./static/styles.css">
+</head>
+
+<body>
+    <div class="page">
+
+        <h1>New MBE Experiment</h1>
+
+        <p>
+            Configure a growth run, select a substrate holder and assign
+            either a scientific substrate or a silicon dummy to each
+            holder position.
+        </p>
+
+        <div class="warning">
+            Holder data are temporary development data in this first UI
+            version. The next step is to replace them with holder entries
+            queried directly from NOMAD.
+        </div>
+
+        <div class="layout">
+
+            <div class="card">
+
+                <h2>Experiment</h2>
+
+                <label for="growthRunId">
+                    Growth Run ID
+                </label>
+
+                <input
+                    id="growthRunId"
+                    placeholder="e.g. m84325"
+                    oninput="updateGrowthRunId()"
+                >
+
+                <label for="holderSelect">
+                    Holder
+                </label>
+
+                <select
+                    id="holderSelect"
+                    onchange="selectHolder()"
+                >
+                    <option value="">
+                        Select holder...
+                    </option>
+                </select>
+
+                <label for="targetUpload">
+                    Target upload
+                </label>
+
+                <select id="targetUpload">
+                    <option value="">
+                        Loading uploads...
+                    </option>
+                </select>
+
+                <p id="uploadStatus" class="small">
+                    Loading writable NOMAD uploads...
+                </p>
+
+                <button
+                    id="saveExperimentButton"
+                    class="primary"
+                    type="button"
+                    style="width:100%; margin-top:16px;"
+                    onclick="saveExperimentToNomad()"
+                >
+                    Save experiment to NOMAD
+                </button>
+
+                <p
+                    id="experimentSaveStatus"
+                    class="small"
+                >
+                    Configure the experiment before saving.
+                </p>
+
+                <div class="experiment-id">
+                    <strong>Combined ID</strong><br>
+                    <span id="combinedId">â€”</span>
+                </div>
+
+                <p class="small">
+                    Operational identifier:
+                    Growth Run ID @ Holder
+                </p>
+
+                <div
+                    id="statePreview"
+                    class="state-preview"
+                ></div>
+
+            </div>
+
+
+            <div class="card">
+
+                <div class="holder-title">
+                    <h2>Holder positions</h2>
+
+                    <span
+                        id="holderLabel"
+                        class="small"
+                    >
+                        No holder selected
+                    </span>
+                </div>
+
+                <div
+                    id="holderGrid"
+                    class="holder-grid"
+                ></div>
+
+                <div
+                    id="substratePicker"
+                    class="substrate-picker"
+                    style="display:none;"
+                >
+                    <h2>Substrate selection</h2>
+
+                    <p class="small">
+                        Select a substrate for the active holder position.
+                    </p>
+
+                    <label for="substrateSearch">
+                        Search
+                    </label>
+
+                    <input
+                        id="substrateSearch"
+                        type="text"
+                        placeholder="Search substrate ID, material, orientation..."
+                    >
+
+                    <div class="substrate-filters">
+
+                        <div>
+                            <label for="filterMaterial">
+                                Material
+                            </label>
+                            <select id="filterMaterial">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="filterOrientation">
+                                Orientation
+                            </label>
+                            <select id="filterOrientation">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="filterOffcut">
+                                Offcut
+                            </label>
+                            <select id="filterOffcut">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="filterDirection">
+                                Offcut direction
+                            </label>
+                            <select id="filterDirection">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="filterStatus">
+                                Status
+                            </label>
+                            <select id="filterStatus">
+                                <option value="">All</option>
+                                <option value="as_delivered">
+                                    As delivered
+                                </option>
+                                <option value="processed">
+                                    Processed
+                                </option>
+                                <option value="grown">
+                                    Grown
+                                </option>
+                            </select>
+                        </div>
+
+                    </div>
+
+                    <div class="treatment-history">
+
+                        <h3>Existing treatment history</h3>
+
+                        <div
+                            id="treatmentHistory"
+                            class="treatment-history-list"
+                        >
+                            <p class="small">
+                                Select a substrate to view its history.
+                            </p>
+                        </div>
+
+                    </div>
+
+                    <div class="treatment-editor">
+                        <h3>Split substrate</h3>
+
+                        <p class="small">
+                            Record a missing substrate-cut step and create
+                            child substrates from the currently selected
+                            substrate.
+                        </p>
+
+                        <label for="splitCount">
+                            Number of child substrates
+                        </label>
+
+                        <input
+                            id="splitCount"
+                            type="number"
+                            min="2"
+                            step="1"
+                            value="4"
+                        >
+
+                        <label for="splitWidth">
+                            Child width [mm]
+                        </label>
+
+                        <input
+                            id="splitWidth"
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value="5"
+                        >
+
+                        <label for="splitLength">
+                            Child length [mm]
+                        </label>
+
+                        <input
+                            id="splitLength"
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value="5"
+                        >
+
+                        <label for="splitThickness">
+                            Child thickness [mm]
+                        </label>
+
+                        <input
+                            id="splitThickness"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="e.g. 0.5"
+                        >
+
+                        <label for="splitDateTime">
+                            Date / time
+                        </label>
+
+                        <input
+                            id="splitDateTime"
+                            type="datetime-local"
+                        >
+
+                        <label for="splitNotes">
+                            Notes
+                        </label>
+
+                        <textarea
+                            id="splitNotes"
+                            placeholder="Optional notes about the cut"
+                        ></textarea>
+
+                        <button
+                            id="splitSubstrateButton"
+                            class="secondary"
+                            type="button"
+                            style="margin-top:12px; width:100%;"
+                            onclick="saveSubstrateSplit()"
+                        >
+                            Create child substrates
+                        </button>
+
+                        <p
+                            id="splitSubstrateStatus"
+                            class="small"
+                        >
+                            Select a substrate before creating a cut.
+                        </p>
+
+                        <div
+                            id="splitChildPicker"
+                            style="display:none; margin-top:14px;"
+                        >
+                            <h3>
+                                Child substrates
+                            </h3>
+
+                            <p class="small">
+                                Select which child substrate goes into
+                                the active holder position.
+                            </p>
+
+                            <div
+                                id="splitChildResults"
+                                class="treatment-history-list"
+                            ></div>
+
+                            <button
+                                id="refreshSplitChildrenButton"
+                                class="secondary"
+                                type="button"
+                                style="width:100%; margin-top:10px;"
+                                onclick="refreshSplitChildren()"
+                            >
+                                Refresh child substrates
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="treatment-editor">
+
+                        <h3>Substrate treatments</h3>
+
+                        <p class="small">
+                            Add existing NOMAD treatment recipes
+                            to the selected substrate.
+                        </p>
+
+                        <label for="treatmentRecipeSelect">
+                            Treatment recipe
+                        </label>
+
+                        <select id="treatmentRecipeSelect">
+                            <option value="">
+                                Loading treatment recipes...
+                            </option>
+                        </select>
+
+                        <label for="treatmentDateTime">
+                            Date / time
+                        </label>
+
+                        <input
+                            id="treatmentDateTime"
+                            type="datetime-local"
+                        >
+
+                        <label for="treatmentNotes">
+                            Notes
+                        </label>
+
+                        <textarea
+                            id="treatmentNotes"
+                            placeholder="Optional notes"
+                        ></textarea>
+
+
+                        <button
+                            id="addTreatmentButton"
+                            type="button"
+                            class="secondary"
+                            style="margin-top:10px;"
+                            disabled
+                        >
+                            Add treatment
+                        </button>
+
+                        <div
+                            id="treatmentQueue"
+                            class="treatment-queue"
+                        >
+                            <p class="small">
+                                No treatments selected.
+                            </p>
+                        </div>
+
+                    </div>
+
+                    <div
+                        id="substrateResults"
+                        class="substrate-results"
+                    >
+                        <p class="small">
+                            No substrate data loaded yet.
+                        </p>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+    </div>
+
+
+    <script src="./static/app.js"></script>
+
+</body>
+</html>

@@ -1,4 +1,4 @@
-﻿from nomad.datamodel.data import EntryData
+from nomad.datamodel.data import EntryData
 from nomad.datamodel.metainfo.annotations import (
     ELNAnnotation,
     ELNComponentEnum,
