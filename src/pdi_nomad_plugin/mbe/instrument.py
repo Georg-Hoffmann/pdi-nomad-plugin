@@ -1,4 +1,4 @@
-import plotly.graph_objects as go
+﻿import plotly.graph_objects as go
 from nomad.datamodel.data import ArchiveSection, EntryData
 from nomad.datamodel.hdf5 import HDF5Reference
 from nomad.datamodel.metainfo.annotations import (
@@ -664,7 +664,7 @@ class RfGeneratorHeater(PVDEvaporationSource):
 class VolumetricFlowRatePDI(VolumetricFlowRate):
     """
     The volumetric flow rate of a gas at standard conditions, i.e. the equivalent rate
-    at a temperature of 0 °C (273.15 K) and a pressure of 1 atm (101325 Pa).
+    at a temperature of 0 Â°C (273.15 K) and a pressure of 1 atm (101325 Pa).
     """
 
     m_def = Section(a_h5web=H5WebAnnotation(axes='time', signal='value'))
@@ -828,6 +828,21 @@ class FilledSubstrateHolderPositionPDI(FilledSubstrateHolderPosition):
         description="""
         A short name for this position. This name is used as label of the position.
         """,
+    )
+
+    position_usage = Quantity(
+        type=MEnum(
+            'substrate',
+            'si_dummy',
+        ),
+        description="""
+        Physical occupancy of this holder position.
+        Use 'substrate' for a scientific substrate referenced in NOMAD
+        and 'si_dummy' for a protective silicon dummy without scientific data.
+        """,
+        a_eln=ELNAnnotation(
+            component='EnumEditQuantity',
+        ),
     )
     x_position = Quantity(
         type=float,

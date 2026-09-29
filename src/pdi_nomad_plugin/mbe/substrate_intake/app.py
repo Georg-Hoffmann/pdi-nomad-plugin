@@ -92,6 +92,7 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
         'm_def': 'pdi_nomad_plugin.mbe.materials.SubstrateBatchMbe',
         'supplier': data.supplier or None,
         'supplier_id': data.supplier_id or None,
+        'material_designation': data.material or None,
         'crystal_id': data.crystal_id or None,
         'charge_id': data.charge or None,
         'offcut_angle': data.offcut_angle,

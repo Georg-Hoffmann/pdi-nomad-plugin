@@ -1,4 +1,4 @@
-from nomad.datamodel.data import EntryData
+﻿from nomad.datamodel.data import EntryData
 from nomad.datamodel.metainfo.annotations import (
     ELNAnnotation,
     ELNComponentEnum,
@@ -61,6 +61,7 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
                     'datetime',
                     'supplier',
                     'supplier_id',
+                    'material_designation',
                     'crystal_id',
                     'charge_id',
                     'polishing',
@@ -90,6 +91,18 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
             component=ELNComponentEnum.DateEditQuantity,
         ),
     )
+    material_designation = Quantity(
+        type=str,
+        description=(
+            'Human-readable substrate material designation, '
+            'e.g. SrTiO3, GdScO3, YSZ, or BaSnO3.'
+        ),
+        a_eln=ELNAnnotation(
+            component='StringEditQuantity',
+            label='Material / Crystal designation',
+        ),
+    )
+
     crystal_id = Quantity(
         type=str,
         description=(
@@ -207,7 +220,7 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
             angle = self.offcut_angle
             if hasattr(angle, 'magnitude'):
                 angle = angle.magnitude
-            self.offcut_label = f'{float(angle):g}°'
+            self.offcut_label = f'{float(angle):g}Â°'
         else:
             self.offcut_label = None
 
@@ -324,7 +337,7 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
                 if clean_raw.lower() in lattice_map:
                     material.symmetry.bravais_lattice = lattice_map[clean_raw.lower()]
                     logger.info(
-                        f'✓ Mapped lattice: {clean_raw} -> '
+                        f'âœ“ Mapped lattice: {clean_raw} -> '
                         f'{lattice_map[clean_raw.lower()]}'
                     )
 
@@ -333,7 +346,7 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
                     in material.symmetry.m_def.quantities['bravais_lattice'].type
                 ):
                     material.symmetry.bravais_lattice = clean_raw
-                    logger.info(f'✓ Set lattice directly: {clean_raw}')
+                    logger.info(f'âœ“ Set lattice directly: {clean_raw}')
                 else:
                     logger.warning(f'Ignoring invalid bravais_lattice: {clean_raw}')
             else:
@@ -352,7 +365,7 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
                 if lattice == 'hR':
                     material.symmetry.crystal_system = 'trigonal'
                     logger.info(
-                        "✓ Inferred crystal_system 'trigonal' from lattice 'hR'"
+                        "âœ“ Inferred crystal_system 'trigonal' from lattice 'hR'"
                     )
                 else:
                     # Standard lookup
@@ -367,7 +380,7 @@ class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
                     if pearson_first in system_lookup:
                         material.symmetry.crystal_system = system_lookup[pearson_first]
                         logger.info(
-                            f'✓ Inferred crystal_system '
+                            f'âœ“ Inferred crystal_system '
                             f"'{system_lookup[pearson_first]}' "
                             f"from lattice '{lattice}'"
                         )
@@ -400,6 +413,7 @@ class SubstrateBatchMbe(SubstrateMbe, EntryData):
                     'datetime',
                     'supplier',
                     'supplier_id',
+                    'material_designation',
                     'crystal_id',
                     'charge_id',
                     'polishing',
