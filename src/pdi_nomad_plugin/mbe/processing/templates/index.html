@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Processing</title>
+    <link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+<main class="page">
+    <h1>Processing</h1>
+    <p class="subtitle">
+        Apply one or more processes to selected substrates.
+    </p>
+
+    <div class="layout">
+        <section class="panel">
+            <h2>Select substrates</h2>
+
+            <label for="substrateSearch">Search ID or batch prefix</label>
+            <input
+                id="substrateSearch"
+                type="text"
+                placeholder="e.g. MN2490"
+            >
+
+            <div class="filters">
+                <div>
+                    <label for="materialFilter">Material</label>
+                    <select id="materialFilter">
+                        <option value="">All</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="orientationFilter">Orientation</label>
+                    <select id="orientationFilter">
+                        <option value="">All</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="actions">
+                <button id="selectAllButton" type="button">
+                    Select all filtered
+                </button>
+                <button id="clearSelectionButton" type="button">
+                    Clear selection
+                </button>
+            </div>
+
+            <div id="substrateStatus" class="status"></div>
+
+            <div class="result-grid result-header">
+                <div></div>
+                <div>ID</div>
+                <div>Material</div>
+                <div>Orientation</div>
+            </div>
+
+            <div id="substrateResults"></div>
+        </section>
+
+        <section class="panel">
+            <h2>Processes</h2>
+
+            <div id="processList" class="process-list"></div>
+
+            <button id="addProcessButton" class="add-process" type="button">
+                + Add another process to the substrates
+            </button>
+
+            <div class="save-row">
+                <div id="processStatus" class="status">
+                    Loading recipes...
+                </div>
+
+                <button
+                    id="saveProcessesButton"
+                    type="button"
+                    disabled
+                >
+                    Save all processes
+                </button>
+            </div>
+        </section>
+    </div>
+</main>
+
+<script src="static/app.js"></script>
+</body>
+</html>
