@@ -135,4 +135,11 @@ mbe_app = "pdi_nomad_plugin.mbe.mbe_app:substrateapp"
 substrate_intake = "pdi_nomad_plugin.mbe.substrate_intake:substrate_intake"
 new_mbe_experiment = "pdi_nomad_plugin.mbe.new_mbe_experiment:new_mbe_experiment"
 
+
+[tool.setuptools.package-data]
+"pdi_nomad_plugin.mbe.new_mbe_experiment" = [
+    "templates/*.html",
+    "static/*",
+]
+
 [tool.setuptools_scm]
