@@ -8,12 +8,29 @@ function nomadApiBase() {
     return '/api/v1';
 }
 
-const recipeSchemas = {
-    cleaning: {label: 'Cleaning', schema: 'pdi_nomad_plugin.general.schema.CleaningRecipePDI', processSchema: 'pdi_nomad_plugin.general.schema.CleaningPDI'},
-    annealing: {label: 'Annealing', schema: 'pdi_nomad_plugin.general.schema.AnnealingRecipePDI', processSchema: 'pdi_nomad_plugin.general.schema.AnnealingPDI'},
-    etching: {label: 'Etching', schema: 'pdi_nomad_plugin.general.schema.EtchingRecipePDI', processSchema: 'pdi_nomad_plugin.general.schema.EtchingPDI'},
-    back_side_coating: {label: 'Back-side coating', schema: 'pdi_nomad_plugin.general.schema.BackSideCoatingRecipePDI', processSchema: 'pdi_nomad_plugin.general.schema.BackSideCoatingPDI'}
-};
+let recipeSchemas = {};
+
+
+async function loadProcessTypes() {
+    const response = await fetch('./process-types');
+    if (!response.ok) {
+        throw new Error(
+            'Could not load process types: ' + response.status
+        );
+    }
+
+    const result = await response.json();
+
+    if (
+        !result ||
+        typeof result !== 'object' ||
+        !Object.keys(result).length
+    ) {
+        throw new Error('No process types configured.');
+    }
+
+    return result;
+}
 
 let substrates = [];
 let recipes = [];
@@ -91,25 +108,84 @@ async function loadUploads() {
     const select = document.getElementById('targetUpload');
     const status = document.getElementById('uploadStatus');
     const params = new URLSearchParams();
-    params.append('roles', 'main_author');
-    params.append('roles', 'coauthor');
+
+    params.append('is_published', 'false');
+    params.append('is_processing', 'false');
     params.append('page_size', '100');
+
     try {
-        const response = await fetch(nomadApiBase() + '/uploads?' + params.toString());
-        if (!response.ok) throw new Error('Upload request failed: ' + response.status);
-        const result = await response.json();
-        const uploads = (result.data || []).filter(function(upload) { return !upload.published; });
-        select.innerHTML = '<option value="">Select target upload...</option>';
+        const [userResponse, uploadsResponse] = await Promise.all([
+            fetch(nomadApiBase() + '/users/me'),
+            fetch(
+                nomadApiBase() +
+                '/uploads?' +
+                params.toString()
+            )
+        ]);
+
+        if (!userResponse.ok) {
+            throw new Error(
+                'User request failed: ' +
+                userResponse.status
+            );
+        }
+
+        if (!uploadsResponse.ok) {
+            throw new Error(
+                'Upload request failed: ' +
+                uploadsResponse.status
+            );
+        }
+
+        const user = await userResponse.json();
+        const result = await uploadsResponse.json();
+        const userId = user.user_id;
+
+        if (!userId) {
+            throw new Error(
+                'Authenticated NOMAD user has no user_id.'
+            );
+        }
+
+        const uploads = (result.data || []).filter(
+            function(upload) {
+                const writers = Array.isArray(upload.writers)
+                    ? upload.writers
+                    : [];
+
+                return (
+                    upload.main_author === userId ||
+                    writers.includes(userId)
+                );
+            }
+        );
+
+        select.innerHTML =
+            '<option value="">Select target upload...</option>';
+
         uploads.forEach(function(upload) {
-            const option = document.createElement('option');
+            const option =
+                document.createElement('option');
+
             option.value = upload.upload_id;
-            option.textContent = (upload.upload_name || 'Unnamed upload') + ' — ' + upload.upload_id;
+            option.textContent =
+                (upload.upload_name || 'Unnamed upload') +
+                ' ? ' +
+                upload.upload_id;
+
             select.appendChild(option);
         });
-        status.textContent = uploads.length + ' writable unpublished upload(s) available.';
+
+        status.textContent =
+            uploads.length +
+            ' directly writable unpublished upload(s).';
+
     } catch (error) {
-        select.innerHTML = '<option value="">Could not load uploads</option>';
-        status.textContent = 'Error: ' + error.message;
+        select.innerHTML =
+            '<option value="">Could not load uploads</option>';
+
+        status.textContent =
+            'Error: ' + error.message;
     }
 }
 
@@ -280,13 +356,27 @@ function processArchiveData(definition, selectedSubstrates, index) {
     if (!definition.datetime) throw new Error('Process ' + (index + 1) + ': enter date / time.');
     const schema = recipeSchemas[definition.type];
     if (!schema) throw new Error('Unsupported process type: ' + definition.type);
+    selectedSubstrates.forEach(function(substrate) {
+        if (!substrate.entryId || !substrate.uploadId) {
+            throw new Error(
+                'Process ' + (index + 1) +
+                ': substrate ' + (substrate.labId || '(unknown)') +
+                ' has no valid NOMAD entry/upload reference.'
+            );
+        }
+    });
+
     const data = {
         m_def: schema.processSchema,
         name: schema.label + ' - ' + selectedSubstrates.length + ' substrate' + (selectedSubstrates.length === 1 ? '' : 's'),
         datetime: new Date(definition.datetime).toISOString(),
         recipe: nomadArchiveReference(definition.recipe.uploadId, definition.recipe.entryId),
         samples: selectedSubstrates.map(function(substrate) {
-            return {name: substrate.labId, reference: nomadArchiveReference(substrate.uploadId, substrate.entryId)};
+            return {
+                name: substrate.labId,
+                lab_id: substrate.labId,
+                reference: nomadArchiveReference(substrate.uploadId, substrate.entryId)
+            };
         })
     };
     if (definition.comments) data.description = definition.comments;
@@ -298,16 +388,54 @@ async function uploadArchive(uploadId, filename, data) {
     params.append('file_name', filename);
     params.append('overwrite_if_exists', 'false');
     params.append('trigger_processing', 'true');
-    const response = await fetch(nomadApiBase() + '/uploads/' + encodeURIComponent(uploadId) + '/raw/?' + params.toString(), {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({data: data}, null, 2)
-    });
+    params.append('wait_for_processing', 'true');
+    params.append('include_archive', 'true');
+
+    const response = await fetch(
+        nomadApiBase() +
+        '/uploads/' +
+        encodeURIComponent(uploadId) +
+        '/raw/?' +
+        params.toString(),
+        {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({data: data}, null, 2)
+        }
+    );
+
     if (!response.ok) {
         let detail = '';
-        try { const err = await response.json(); detail = err.detail ? ': ' + err.detail : ''; } catch (_) {}
+        try {
+            const err = await response.json();
+            detail = err.detail ? ': ' + JSON.stringify(err.detail) : '';
+        } catch (_) {}
         throw new Error('Process upload failed (' + response.status + ')' + detail);
     }
+
+    const result = await response.json();
+    const processing = result.processing || {};
+    const entry = processing.entry || {};
+    const errors = Array.isArray(entry.errors) ? entry.errors : [];
+    const warnings = Array.isArray(entry.warnings) ? entry.warnings : [];
+
+    if (errors.length) {
+        throw new Error(
+            'NOMAD processing failed: ' + errors.join('; ')
+        );
+    }
+
+    if (warnings.length) {
+        console.warn(
+            'NOMAD processing warnings for ' + filename + ':',
+            warnings
+        );
+    }
+
+    return result;
 }
 
 async function saveProcesses() {
@@ -327,7 +455,7 @@ async function saveProcesses() {
             const definition = definitions[i];
             const data = processArchiveData(definition, selected, i);
             const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '');
-            const filename = 'processing_' + safePart(definition.type) + '_' + stamp + '_' + String(i + 1) + '.archive.yaml';
+            const filename = 'processing_' + safePart(definition.type) + '_' + stamp + '_' + String(i + 1) + '.archive.json';
             status.textContent = 'Saving process ' + (i + 1) + ' of ' + definitions.length + '...';
             await uploadArchive(uploadId, filename, data);
             saved += 1;
@@ -366,7 +494,14 @@ function applyIncomingSelection() {
 async function initialise() {
     try {
         document.getElementById('substrateStatus').textContent = 'Loading substrates...';
-        [substrates, recipes] = await Promise.all([loadSubstrates(), loadRecipes()]);
+
+        recipeSchemas = await loadProcessTypes();
+
+        [substrates, recipes] = await Promise.all([
+            loadSubstrates(),
+            loadRecipes()
+        ]);
+
         await loadUploads();
         populateFilter('materialFilter', substrates.map(function(s) { return s.material; }));
         populateFilter('batchFilter', substrates.flatMap(function(s) { return [s.crystalId, s.chargeId]; }));
