@@ -3370,6 +3370,48 @@ async function queryEntriesBySchema(schema, pageSize, include) {
 }
 
 
+async function queryExperimentHolderReferences() {
+    const response = await fetch(
+        nomadApiBase() + '/entries/archive/query',
+        {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                query: {
+                    'section_defs.definition_qualified_name':
+                        'pdi_nomad_plugin.mbe.processes.ExperimentMbePDI'
+                },
+                pagination: {page_size: 1000},
+                required: {
+                    data: {
+                        substrate_holder: {
+                            reference: '*'
+                        }
+                    }
+                }
+            })
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(
+            'Experiment holder-reference query failed: ' +
+            response.status
+        );
+    }
+
+    const result = await response.json();
+    return (result.data || []).map(function(entry) {
+        const archive = entry.archive || {};
+        return {
+            entry_id: entry.entry_id,
+            upload_id: entry.upload_id,
+            data: archive.data || {}
+        };
+    });
+}
+
+
 function entryIdFromReference(reference) {
     if (!reference) return null;
     if (typeof reference === 'object') {
@@ -3410,11 +3452,7 @@ async function loadHolderCatalogV2() {
             500,
             ['entry_id', 'upload_id', 'entry_name', 'data', 'mainfile', 'published']
         ),
-        queryEntriesBySchema(
-            'pdi_nomad_plugin.mbe.processes.ExperimentMbePDI',
-            1000,
-            ['entry_id', 'upload_id', 'entry_name', 'data']
-        )
+        queryExperimentHolderReferences()
     ]);
 
     const empty = emptyRaw.filter(function(entry) {
