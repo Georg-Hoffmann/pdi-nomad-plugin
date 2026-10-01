@@ -1,579 +1,399 @@
 function nomadApiBase() {
-    const marker = '/gui/';
     const pathname = window.location.pathname;
-    const index = pathname.indexOf(marker);
-
-    const deploymentBase =
-        index >= 0 ? pathname.slice(0, index) : '';
-
-    return deploymentBase + '/api/v1';
+    const markers = ['/gui/', '/dashboards/'];
+    for (const marker of markers) {
+        const index = pathname.indexOf(marker);
+        if (index >= 0) return pathname.slice(0, index) + '/api/v1';
+    }
+    return '/api/v1';
 }
 
-
 const recipeSchemas = {
-    cleaning: {
-        label: 'Cleaning',
-        schema:
-            'pdi_nomad_plugin.general.schema.CleaningRecipePDI'
-    },
-    annealing: {
-        label: 'Annealing',
-        schema:
-            'pdi_nomad_plugin.general.schema.AnnealingRecipePDI'
-    },
-    etching: {
-        label: 'Etching',
-        schema:
-            'pdi_nomad_plugin.general.schema.EtchingRecipePDI'
-    },
-    back_side_coating: {
-        label: 'Back-side coating',
-        schema:
-            'pdi_nomad_plugin.general.schema.BackSideCoatingRecipePDI'
-    }
+    cleaning: {label: 'Cleaning', schema: 'pdi_nomad_plugin.general.schema.CleaningRecipePDI', processSchema: 'pdi_nomad_plugin.general.schema.CleaningPDI'},
+    annealing: {label: 'Annealing', schema: 'pdi_nomad_plugin.general.schema.AnnealingRecipePDI', processSchema: 'pdi_nomad_plugin.general.schema.AnnealingPDI'},
+    etching: {label: 'Etching', schema: 'pdi_nomad_plugin.general.schema.EtchingRecipePDI', processSchema: 'pdi_nomad_plugin.general.schema.EtchingPDI'},
+    back_side_coating: {label: 'Back-side coating', schema: 'pdi_nomad_plugin.general.schema.BackSideCoatingRecipePDI', processSchema: 'pdi_nomad_plugin.general.schema.BackSideCoatingPDI'}
 };
 
 let substrates = [];
 let recipes = [];
 let processCounter = 0;
 
+function nomadArchiveReference(uploadId, entryId) {
+    return '../uploads/' + uploadId + '/archive/' + entryId + '#/data';
+}
 
 async function queryEntries(schema, pageSize, include) {
-    const response = await fetch(
-        nomadApiBase() + '/entries/query',
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                query: {
-                    'section_defs.definition_qualified_name': schema
-                },
-                pagination: {
-                    page_size: pageSize
-                },
-                required: {
-                    include: include
-                }
-            })
-        }
-    );
-
-    if (!response.ok) {
-        throw new Error(
-            'NOMAD query failed for ' +
-            schema +
-            ': ' +
-            response.status
-        );
-    }
-
+    const response = await fetch(nomadApiBase() + '/entries/query', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            query: {'section_defs.definition_qualified_name': schema},
+            pagination: {page_size: pageSize},
+            required: {include: include}
+        })
+    });
+    if (!response.ok) throw new Error('NOMAD query failed for ' + schema + ': ' + response.status);
     const result = await response.json();
     return result.data || [];
 }
 
+function substrateStatus(substrate) {
+    if (substrate.grown) return 'grown';
+    if (substrate.processed) return 'processed';
+    if (substrate.asDelivered) return 'as_delivered';
+    return '';
+}
 
 async function loadSubstrates() {
-    const entries = await queryEntries(
-        'pdi_nomad_plugin.mbe.materials.SubstrateMbe',
-        500,
-        [
-            'entry_id',
-            'upload_id',
-            'entry_name',
-            'data.lab_id',
-            'data.material_designation',
-            'data.surface_orientation_label'
-        ]
-    );
-
+    const entries = await queryEntries('pdi_nomad_plugin.mbe.materials.SubstrateMbe', 1000, [
+        'entry_id', 'upload_id', 'entry_name', 'data.lab_id', 'data.material_designation',
+        'data.chemical_formula', 'data.crystal_id', 'data.charge_id', 'data.surface_orientation_label',
+        'data.as_delivered', 'data.processed', 'data.grown'
+    ]);
     return entries.map(function(entry) {
         const data = entry.data || {};
-
         return {
             entryId: entry.entry_id,
             uploadId: entry.upload_id,
-            labId:
-                data.lab_id ||
-                entry.entry_name ||
-                entry.entry_id,
-            material:
-                data.material_designation || '',
-            orientation:
-                data.surface_orientation_label || '',
+            labId: data.lab_id || entry.entry_name || entry.entry_id,
+            material: data.material_designation || data.chemical_formula || '',
+            formula: data.chemical_formula || '',
+            crystalId: data.crystal_id || '',
+            chargeId: data.charge_id || '',
+            orientation: data.surface_orientation_label || '',
+            asDelivered: Boolean(data.as_delivered),
+            processed: Boolean(data.processed),
+            grown: Boolean(data.grown),
             selected: false
         };
     });
 }
 
-
 async function loadRecipes() {
     const result = [];
-
     for (const [type, definition] of Object.entries(recipeSchemas)) {
-        const entries = await queryEntries(
-            definition.schema,
-            100,
-            [
-                'entry_id',
-                'upload_id',
-                'entry_name'
-            ]
-        );
-
+        const entries = await queryEntries(definition.schema, 200, ['entry_id', 'upload_id', 'entry_name', 'data.name', 'data.lab_id']);
         entries.forEach(function(entry) {
+            const data = entry.data || {};
             result.push({
                 type: type,
                 entryId: entry.entry_id,
                 uploadId: entry.upload_id,
-                name:
-                    entry.entry_name ||
-                    entry.entry_id
+                name: data.lab_id || data.name || entry.entry_name || entry.entry_id
             });
         });
     }
-
     return result;
 }
 
-
-function uniqueSorted(values) {
-    return Array.from(
-        new Set(values.filter(Boolean))
-    ).sort(
-        (a, b) => a.localeCompare(b)
-    );
-}
-
-
-function populateFilter(id, values) {
-    const select =
-        document.getElementById(id);
-
-    select.innerHTML =
-        '<option value="">All</option>';
-
-    uniqueSorted(values).forEach(function(value) {
-        const option =
-            document.createElement('option');
-
-        option.value = value;
-        option.textContent = value;
-
-        select.appendChild(option);
-    });
-}
-
-
-function filteredSubstrates() {
-    const search =
-        document
-            .getElementById('substrateSearch')
-            .value
-            .trim()
-            .toLowerCase();
-
-    const material =
-        document
-            .getElementById('materialFilter')
-            .value;
-
-    const orientation =
-        document
-            .getElementById('orientationFilter')
-            .value;
-
-    return substrates.filter(function(substrate) {
-        return (
-            (
-                !search ||
-                substrate.labId
-                    .toLowerCase()
-                    .includes(search)
-            ) &&
-            (
-                !material ||
-                substrate.material === material
-            ) &&
-            (
-                !orientation ||
-                substrate.orientation === orientation
-            )
-        );
-    });
-}
-
-
-function renderSubstrates() {
-    const container =
-        document.getElementById('substrateResults');
-
-    const visible =
-        filteredSubstrates();
-
-    container.innerHTML = '';
-
-    visible.forEach(function(substrate) {
-        const row =
-            document.createElement('div');
-
-        row.className =
-            'result-grid result-row';
-
-        const checkbox =
-            document.createElement('input');
-
-        checkbox.type = 'checkbox';
-        checkbox.checked = substrate.selected;
-
-        checkbox.addEventListener(
-            'change',
-            function() {
-                substrate.selected =
-                    checkbox.checked;
-            }
-        );
-
-        row.appendChild(checkbox);
-
-        [
-            substrate.labId,
-            substrate.material || '-',
-            substrate.orientation || '-'
-        ].forEach(function(value) {
-            const cell =
-                document.createElement('div');
-
-            cell.textContent = value;
-            row.appendChild(cell);
-        });
-
-        container.appendChild(row);
-    });
-
-    document.getElementById(
-        'substrateStatus'
-    ).textContent =
-        visible.length +
-        ' matching substrate' +
-        (visible.length === 1 ? '' : 's');
-}
-
-
-function updateRecipeSelect(card) {
-    const type =
-        card.querySelector('.process-type').value;
-
-    const select =
-        card.querySelector('.recipe-select');
-
-    const matching =
-        recipes.filter(
-            recipe => recipe.type === type
-        );
-
-    select.innerHTML = '';
-
-    const placeholder =
-        document.createElement('option');
-
-    placeholder.value = '';
-    placeholder.textContent =
-        matching.length
-            ? 'Select recipe...'
-            : 'No recipes found';
-
-    select.appendChild(placeholder);
-
-    matching.forEach(function(recipe) {
-        const option =
-            document.createElement('option');
-
-        option.value = recipe.entryId;
-        option.textContent = recipe.name;
-
-        select.appendChild(option);
-    });
-
-    select.disabled =
-        matching.length === 0;
-}
-
-
-function collapseOthers(active) {
-    document
-        .querySelectorAll('.process-card')
-        .forEach(function(card) {
-            if (card !== active) {
-                card.classList.remove('open');
-            }
-        });
-}
-
-
-function renumberProcesses() {
-    const cards =
-        document.querySelectorAll('.process-card');
-
-    cards.forEach(function(card, index) {
-        card.querySelector(
-            '.process-title'
-        ).textContent =
-            'Process ' + (index + 1);
-    });
-
-    processCounter = cards.length;
-}
-
-
-function addProcess() {
-    processCounter += 1;
-
-    const card =
-        document.createElement('div');
-
-    card.className =
-        'process-card open';
-
-    collapseOthers(card);
-
-    const options =
-        Object.entries(recipeSchemas)
-            .map(function([value, definition]) {
-                return (
-                    '<option value="' +
-                    value +
-                    '">' +
-                    definition.label +
-                    '</option>'
-                );
-            })
-            .join('');
-
-    card.innerHTML = `
-        <div class="process-summary">
-            <div>
-                <div class="process-title">
-                    Process ${processCounter}
-                </div>
-                <div class="process-meta">
-                    Cleaning
-                </div>
-            </div>
-            <div>⌄</div>
-        </div>
-
-        <div class="process-body">
-            <div class="process-fields">
-                <div>
-                    <label>Process type</label>
-                    <select class="process-type">
-                        ${options}
-                    </select>
-                </div>
-
-                <div>
-                    <label>Date / Time</label>
-                    <input
-                        class="process-datetime"
-                        type="datetime-local"
-                    >
-                </div>
-            </div>
-
-            <label>Recipe</label>
-            <select class="recipe-select"></select>
-
-            <label>Comments</label>
-            <textarea
-                class="process-comments"
-                placeholder="Optional"
-            ></textarea>
-
-            <div class="process-footer">
-                <button
-                    class="remove-button"
-                    type="button"
-                >
-                    Remove process
-                </button>
-
-                <button
-                    class="collapse-button"
-                    type="button"
-                >
-                    Done / collapse
-                </button>
-            </div>
-        </div>
-    `;
-
-    document
-        .getElementById('processList')
-        .appendChild(card);
-
-    const typeSelect =
-        card.querySelector('.process-type');
-
-    const meta =
-        card.querySelector('.process-meta');
-
-    card
-        .querySelector('.process-summary')
-        .addEventListener(
-            'click',
-            function() {
-                card.classList.toggle('open');
-
-                if (card.classList.contains('open')) {
-                    collapseOthers(card);
-                }
-            }
-        );
-
-    typeSelect.addEventListener(
-        'change',
-        function() {
-            meta.textContent =
-                recipeSchemas[
-                    typeSelect.value
-                ].label;
-
-            updateRecipeSelect(card);
-        }
-    );
-
-    card
-        .querySelector('.collapse-button')
-        .addEventListener(
-            'click',
-            function() {
-                card.classList.remove('open');
-            }
-        );
-
-    card
-        .querySelector('.remove-button')
-        .addEventListener(
-            'click',
-            function() {
-                card.remove();
-                renumberProcesses();
-            }
-        );
-
-    updateRecipeSelect(card);
-}
-
-
-async function initialise() {
+async function loadUploads() {
+    const select = document.getElementById('targetUpload');
+    const status = document.getElementById('uploadStatus');
+    const params = new URLSearchParams();
+    params.append('roles', 'main_author');
+    params.append('roles', 'coauthor');
+    params.append('page_size', '100');
     try {
-        document.getElementById(
-            'substrateStatus'
-        ).textContent =
-            'Loading substrates...';
-
-        [substrates, recipes] =
-            await Promise.all([
-                loadSubstrates(),
-                loadRecipes()
-            ]);
-
-        populateFilter(
-            'materialFilter',
-            substrates.map(
-                substrate => substrate.material
-            )
-        );
-
-        populateFilter(
-            'orientationFilter',
-            substrates.map(
-                substrate => substrate.orientation
-            )
-        );
-
-        renderSubstrates();
-        addProcess();
-
-        document.getElementById(
-            'processStatus'
-        ).textContent =
-            recipes.length +
-            ' recipe entries loaded from NOMAD.';
+        const response = await fetch(nomadApiBase() + '/uploads?' + params.toString());
+        if (!response.ok) throw new Error('Upload request failed: ' + response.status);
+        const result = await response.json();
+        const uploads = (result.data || []).filter(function(upload) { return !upload.published; });
+        select.innerHTML = '<option value="">Select target upload...</option>';
+        uploads.forEach(function(upload) {
+            const option = document.createElement('option');
+            option.value = upload.upload_id;
+            option.textContent = (upload.upload_name || 'Unnamed upload') + ' — ' + upload.upload_id;
+            select.appendChild(option);
+        });
+        status.textContent = uploads.length + ' writable unpublished upload(s) available.';
     } catch (error) {
-        console.error(error);
-
-        document.getElementById(
-            'substrateStatus'
-        ).textContent =
-            'Failed to load NOMAD data.';
-
-        document.getElementById(
-            'processStatus'
-        ).textContent =
-            String(error);
+        select.innerHTML = '<option value="">Could not load uploads</option>';
+        status.textContent = 'Error: ' + error.message;
     }
 }
 
+function uniqueSorted(values) {
+    return Array.from(new Set(values.filter(Boolean))).sort(function(a, b) { return a.localeCompare(b); });
+}
 
-document
-    .getElementById('substrateSearch')
-    .addEventListener(
-        'input',
-        renderSubstrates
-    );
+function populateFilter(id, values) {
+    const select = document.getElementById(id);
+    const previous = select.value;
+    select.innerHTML = '<option value="">All</option>';
+    uniqueSorted(values).forEach(function(value) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+    });
+    if (Array.from(select.options).some(function(option) { return option.value === previous; })) select.value = previous;
+}
 
-document
-    .getElementById('materialFilter')
-    .addEventListener(
-        'change',
-        renderSubstrates
-    );
+function filteredSubstrates() {
+    const search = document.getElementById('substrateSearch').value.trim().toLowerCase();
+    const material = document.getElementById('materialFilter').value;
+    const batch = document.getElementById('batchFilter').value;
+    const orientation = document.getElementById('orientationFilter').value;
+    const status = document.getElementById('statusFilter').value;
+    return substrates.filter(function(substrate) {
+        const searchable = [substrate.labId, substrate.material, substrate.formula, substrate.crystalId, substrate.chargeId, substrate.orientation]
+            .filter(Boolean).join(' ').toLowerCase();
+        return (!search || searchable.includes(search)) &&
+            (!material || substrate.material === material) &&
+            (!batch || substrate.crystalId === batch || substrate.chargeId === batch) &&
+            (!orientation || substrate.orientation === orientation) &&
+            (!status || substrateStatus(substrate) === status);
+    });
+}
 
-document
-    .getElementById('orientationFilter')
-    .addEventListener(
-        'change',
-        renderSubstrates
-    );
+function renderSubstrates() {
+    const container = document.getElementById('substrateResults');
+    const visible = filteredSubstrates();
+    container.innerHTML = '';
+    visible.forEach(function(substrate) {
+        const row = document.createElement('div');
+        row.className = 'result-grid result-row';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = substrate.selected;
+        checkbox.addEventListener('change', function() { substrate.selected = checkbox.checked; updateSaveSummary(); });
+        row.appendChild(checkbox);
+        [
+            substrate.labId,
+            substrate.material || '-',
+            substrate.crystalId || substrate.chargeId || '-',
+            substrate.orientation || '-',
+            substrateStatus(substrate) || '-'
+        ].forEach(function(value) {
+            const cell = document.createElement('div');
+            cell.textContent = value;
+            row.appendChild(cell);
+        });
+        container.appendChild(row);
+    });
+    document.getElementById('substrateStatus').textContent =
+        visible.length + ' matching substrate' + (visible.length === 1 ? '' : 's') +
+        '; ' + substrates.filter(function(item) { return item.selected; }).length + ' selected.';
+}
 
-document
-    .getElementById('selectAllButton')
-    .addEventListener(
-        'click',
-        function() {
-            filteredSubstrates().forEach(
-                substrate => {
-                    substrate.selected = true;
-                }
-            );
+function updateRecipeSelect(card) {
+    const type = card.querySelector('.process-type').value;
+    const select = card.querySelector('.recipe-select');
+    const matching = recipes.filter(function(recipe) { return recipe.type === type; });
+    select.innerHTML = '<option value="">' + (matching.length ? 'Select recipe...' : 'No recipes found') + '</option>';
+    matching.forEach(function(recipe) {
+        const option = document.createElement('option');
+        option.value = recipe.entryId;
+        option.dataset.uploadId = recipe.uploadId;
+        option.textContent = recipe.name;
+        select.appendChild(option);
+    });
+    select.disabled = matching.length === 0;
+}
 
-            renderSubstrates();
+function collapseOthers(active) {
+    document.querySelectorAll('.process-card').forEach(function(card) {
+        if (card !== active) card.classList.remove('open');
+    });
+}
+
+function renumberProcesses() {
+    document.querySelectorAll('.process-card').forEach(function(card, index) {
+        card.querySelector('.process-title').textContent = 'Process ' + (index + 1);
+    });
+    processCounter = document.querySelectorAll('.process-card').length;
+    updateSaveSummary();
+}
+
+function localDateTimeValue() {
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+}
+
+function addProcess() {
+    processCounter += 1;
+    const card = document.createElement('div');
+    card.className = 'process-card open';
+    collapseOthers(card);
+    const options = Object.entries(recipeSchemas).map(function(entry) {
+        return '<option value="' + entry[0] + '">' + entry[1].label + '</option>';
+    }).join('');
+    card.innerHTML = `
+        <div class="process-summary"><div><div class="process-title">Process ${processCounter}</div><div class="process-meta">Cleaning</div></div><div>⌄</div></div>
+        <div class="process-body">
+            <div class="process-fields">
+                <div><label>Process type</label><select class="process-type">${options}</select></div>
+                <div><label>Date / Time</label><input class="process-datetime" type="datetime-local" value="${localDateTimeValue()}"></div>
+            </div>
+            <label>Recipe</label><select class="recipe-select"></select>
+            <label>Comments</label><textarea class="process-comments" placeholder="Optional"></textarea>
+            <div class="process-footer"><button class="remove-button" type="button">Remove process</button><button class="collapse-button" type="button">Done / collapse</button></div>
+        </div>`;
+    document.getElementById('processList').appendChild(card);
+    const typeSelect = card.querySelector('.process-type');
+    const meta = card.querySelector('.process-meta');
+    card.querySelector('.process-summary').addEventListener('click', function() {
+        card.classList.toggle('open');
+        if (card.classList.contains('open')) collapseOthers(card);
+    });
+    typeSelect.addEventListener('change', function() {
+        meta.textContent = recipeSchemas[typeSelect.value].label;
+        updateRecipeSelect(card);
+        updateSaveSummary();
+    });
+    card.querySelector('.recipe-select').addEventListener('change', updateSaveSummary);
+    card.querySelector('.collapse-button').addEventListener('click', function() { card.classList.remove('open'); });
+    card.querySelector('.remove-button').addEventListener('click', function() { card.remove(); renumberProcesses(); });
+    updateRecipeSelect(card);
+    updateSaveSummary();
+}
+
+function processDefinitions() {
+    return Array.from(document.querySelectorAll('.process-card')).map(function(card) {
+        const type = card.querySelector('.process-type').value;
+        const recipeSelect = card.querySelector('.recipe-select');
+        const recipe = recipes.find(function(item) { return item.entryId === recipeSelect.value; });
+        return {
+            type: type,
+            recipe: recipe || null,
+            datetime: card.querySelector('.process-datetime').value,
+            comments: card.querySelector('.process-comments').value.trim()
+        };
+    });
+}
+
+function updateSaveSummary() {
+    const selectedCount = substrates.filter(function(item) { return item.selected; }).length;
+    const count = document.querySelectorAll('.process-card').length;
+    const status = document.getElementById('processStatus');
+    if (status) status.textContent = selectedCount + ' substrate(s) selected; ' + count + ' process(es) configured.';
+}
+
+function safePart(value) {
+    return String(value || '').trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9._-]/g, '');
+}
+
+function processArchiveData(definition, selectedSubstrates, index) {
+    if (!definition.recipe) throw new Error('Process ' + (index + 1) + ': select a recipe.');
+    if (!definition.datetime) throw new Error('Process ' + (index + 1) + ': enter date / time.');
+    const schema = recipeSchemas[definition.type];
+    if (!schema) throw new Error('Unsupported process type: ' + definition.type);
+    const data = {
+        m_def: schema.processSchema,
+        name: schema.label + ' - ' + selectedSubstrates.length + ' substrate' + (selectedSubstrates.length === 1 ? '' : 's'),
+        datetime: new Date(definition.datetime).toISOString(),
+        recipe: nomadArchiveReference(definition.recipe.uploadId, definition.recipe.entryId),
+        samples: selectedSubstrates.map(function(substrate) {
+            return {name: substrate.labId, reference: nomadArchiveReference(substrate.uploadId, substrate.entryId)};
+        })
+    };
+    if (definition.comments) data.description = definition.comments;
+    return data;
+}
+
+async function uploadArchive(uploadId, filename, data) {
+    const params = new URLSearchParams();
+    params.append('file_name', filename);
+    params.append('overwrite_if_exists', 'false');
+    params.append('trigger_processing', 'true');
+    const response = await fetch(nomadApiBase() + '/uploads/' + encodeURIComponent(uploadId) + '/raw/?' + params.toString(), {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({data: data}, null, 2)
+    });
+    if (!response.ok) {
+        let detail = '';
+        try { const err = await response.json(); detail = err.detail ? ': ' + err.detail : ''; } catch (_) {}
+        throw new Error('Process upload failed (' + response.status + ')' + detail);
+    }
+}
+
+async function saveProcesses() {
+    const button = document.getElementById('saveProcessesButton');
+    const status = document.getElementById('processStatus');
+    const uploadId = document.getElementById('targetUpload').value;
+    const selected = substrates.filter(function(item) { return item.selected; });
+    const definitions = processDefinitions();
+    if (!uploadId) { status.textContent = 'Select a target upload first.'; return; }
+    if (!selected.length) { status.textContent = 'Select at least one substrate.'; return; }
+    if (!definitions.length) { status.textContent = 'Add at least one process.'; return; }
+
+    button.disabled = true;
+    let saved = 0;
+    try {
+        for (let i = 0; i < definitions.length; i++) {
+            const definition = definitions[i];
+            const data = processArchiveData(definition, selected, i);
+            const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '');
+            const filename = 'processing_' + safePart(definition.type) + '_' + stamp + '_' + String(i + 1) + '.archive.yaml';
+            status.textContent = 'Saving process ' + (i + 1) + ' of ' + definitions.length + '...';
+            await uploadArchive(uploadId, filename, data);
+            saved += 1;
         }
-    );
+        status.textContent = saved + ' process entr' + (saved === 1 ? 'y' : 'ies') + ' saved. NOMAD processing was triggered.';
+    } catch (error) {
+        status.textContent = (saved ? saved + ' process(es) saved; next process failed: ' : 'Error: ') + error.message;
+    } finally {
+        button.disabled = false;
+    }
+}
 
-document
-    .getElementById('clearSelectionButton')
-    .addEventListener(
-        'click',
-        function() {
-            substrates.forEach(
-                substrate => {
-                    substrate.selected = false;
-                }
-            );
-
-            renderSubstrates();
+function applyIncomingSelection() {
+    const params = new URLSearchParams(window.location.search);
+    const entryId = params.get('substrate_entry_id');
+    const returnUrl = params.get('return_url');
+    if (entryId) {
+        const selected = substrates.find(function(item) { return item.entryId === entryId; });
+        if (selected) {
+            selected.selected = true;
+            document.getElementById('substrateSearch').value = selected.labId;
         }
-    );
+    }
+    if (returnUrl) {
+        try {
+            const target = new URL(returnUrl, window.location.origin);
+            if (target.origin === window.location.origin) {
+                const button = document.getElementById('returnButton');
+                button.style.display = 'inline-block';
+                button.addEventListener('click', function() { window.location.href = target.href; });
+            }
+        } catch (_) {}
+    }
+}
 
-document
-    .getElementById('addProcessButton')
-    .addEventListener(
-        'click',
-        addProcess
-    );
+async function initialise() {
+    try {
+        document.getElementById('substrateStatus').textContent = 'Loading substrates...';
+        [substrates, recipes] = await Promise.all([loadSubstrates(), loadRecipes()]);
+        await loadUploads();
+        populateFilter('materialFilter', substrates.map(function(s) { return s.material; }));
+        populateFilter('batchFilter', substrates.flatMap(function(s) { return [s.crystalId, s.chargeId]; }));
+        populateFilter('orientationFilter', substrates.map(function(s) { return s.orientation; }));
+        applyIncomingSelection();
+        renderSubstrates();
+        addProcess();
+        document.getElementById('saveProcessesButton').disabled = false;
+        updateSaveSummary();
+    } catch (error) {
+        console.error(error);
+        document.getElementById('substrateStatus').textContent = 'Failed to load NOMAD data.';
+        document.getElementById('processStatus').textContent = String(error);
+    }
+}
+
+['substrateSearch'].forEach(function(id) { document.getElementById(id).addEventListener('input', renderSubstrates); });
+['materialFilter', 'batchFilter', 'orientationFilter', 'statusFilter'].forEach(function(id) { document.getElementById(id).addEventListener('change', renderSubstrates); });
+document.getElementById('selectAllButton').addEventListener('click', function() {
+    filteredSubstrates().forEach(function(substrate) { substrate.selected = true; });
+    renderSubstrates(); updateSaveSummary();
+});
+document.getElementById('clearSelectionButton').addEventListener('click', function() {
+    substrates.forEach(function(substrate) { substrate.selected = false; });
+    renderSubstrates(); updateSaveSummary();
+});
+document.getElementById('addProcessButton').addEventListener('click', addProcess);
+document.getElementById('saveProcessesButton').addEventListener('click', saveProcesses);
 
 initialise();

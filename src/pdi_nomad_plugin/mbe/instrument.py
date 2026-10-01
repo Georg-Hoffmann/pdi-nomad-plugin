@@ -834,11 +834,13 @@ class FilledSubstrateHolderPositionPDI(FilledSubstrateHolderPosition):
         type=MEnum(
             'substrate',
             'si_dummy',
+            'sapphire_dummy',
         ),
         description="""
         Physical occupancy of this holder position.
-        Use 'substrate' for a scientific substrate referenced in NOMAD
-        and 'si_dummy' for a protective silicon dummy without scientific data.
+        Use 'substrate' for a scientific substrate referenced in NOMAD,
+        'si_dummy' for a protective silicon dummy, and 'sapphire_dummy'
+        for a sapphire / Al2O3 dummy without scientific data.
         """,
         a_eln=ELNAnnotation(
             component='EnumEditQuantity',

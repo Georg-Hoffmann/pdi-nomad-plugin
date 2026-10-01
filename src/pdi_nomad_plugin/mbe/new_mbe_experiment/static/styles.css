@@ -538,3 +538,30 @@ button {
     color: #666;
     margin-top: 3px;
 }
+
+
+/* Holder workflow v2 */
+.subtitle { color: #59636f; margin-top: -6px; margin-bottom: 18px; }
+.workflow-card hr { border: 0; border-top: 1px solid #e0e3e7; margin: 22px 0; }
+.button-stack { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+.full-width { width: 100%; margin-top: 12px; }
+.danger-outline { border: 1px solid #b85c5c; color: #8d3232; background: #fff; }
+.debug-details { margin-top: 16px; }
+.debug-details summary { cursor: pointer; color: #666; font-size: 12px; }
+.holder-image-wrap { margin: 12px auto 20px; text-align: center; }
+.holder-image-wrap img { max-width: 420px; max-height: 260px; width: auto; height: auto; border: 1px solid #d9dde3; border-radius: 8px; background: #fff; }
+.holder-disc-generic { width: min(560px, 92vw); height: min(560px, 92vw); min-width: 340px; min-height: 340px; }
+.generic-slot { border-radius: 9px; appearance: none; padding: 4px; }
+.generic-slot.selected-position { outline: 4px solid rgba(25,118,210,0.28); outline-offset: 3px; }
+.holder-disc-label { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); color: #68717b; font-size: 12px; font-weight: bold; }
+.holder-help { text-align: center; margin-top: 8px; }
+.active-position-controls { margin-top: 14px; }
+.assignment-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.picker-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.picker-heading h2, .picker-heading h3 { margin-bottom: 4px; }
+.split-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px 12px; }
+@media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .button-stack, .split-grid { grid-template-columns: 1fr; }
+    .holder-disc-generic { min-width: 300px; min-height: 300px; }
+}

@@ -210,3 +210,12 @@ button:disabled {
         grid-template-columns: 1fr;
     }
 }
+
+
+.title-row { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.subtitle { color:#59636f; }
+.secondary { background:#eceff3; color:#222; }
+.primary { background:#1976d2; color:#fff; }
+.save-panel { margin-top:20px; padding-top:16px; border-top:1px solid #e0e3e7; }
+.result-grid { grid-template-columns: 34px minmax(130px,1.4fr) minmax(110px,1fr) minmax(90px,1fr) minmax(90px,1fr) minmax(90px,.7fr); }
+@media (max-width: 900px) { .title-row { flex-direction:column; } }
