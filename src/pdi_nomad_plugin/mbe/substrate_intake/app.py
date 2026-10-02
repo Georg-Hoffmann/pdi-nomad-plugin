@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from nomad.config import config
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -143,7 +144,7 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
 
 @app.get('/', response_class=HTMLResponse)
 async def index():
-    return """
+    html = """
     <!doctype html>
     <html>
     <head>
@@ -266,6 +267,17 @@ async def index():
             .small {
                 font-size: 12px;
                 color: #666;
+            }
+
+            /* Soft warning style for the 'select a target upload' hint. */
+            .warning {
+                font-size: 12px;
+                color: #8a5a00;
+                background: #fff3cd;
+                border: 1px solid #ffe69c;
+                border-radius: 6px;
+                padding: 6px 10px;
+                display: inline-block;
             }
         </style>
     </head>
@@ -413,14 +425,17 @@ async def index():
         </div>
         <script>
             function nomadApiBase() {
-                const marker = '/gui/';
-                const pathname = window.location.pathname;
+            if (window.NOMAD_API_BASE) { return window.NOMAD_API_BASE; }
+            const pathname = window.location.pathname;
+            const markers = ['/gui/', '/dashboards/'];
+
+            for (const marker of markers) {
                 const index = pathname.indexOf(marker);
-
-                const deploymentBase =
-                    index >= 0 ? pathname.slice(0, index) : '';
-
-                return deploymentBase + '/api/v1';
+                if (index >= 0) {
+                    return pathname.slice(0, index) + '/api/v1';
+                }
+            }
+                return '/api/v1'; // deployed at root
             }
 
             function cleanPart(value) {
@@ -502,6 +517,23 @@ async def index():
                 };
             }
 
+            // Clears the form back to defaults after a successful save,
+            // so the next substrate batch can be entered right away.
+            function resetForm() {
+                document.getElementById('supplier').value = '';
+                document.getElementById('supplier_id').value = '';
+                document.getElementById('material').value = '';
+                document.getElementById('crystal_id').value = '';
+                document.getElementById('charge').value = '';
+                document.getElementById('orientation').value = '';
+                document.getElementById('offcut_angle').value = '';
+                document.getElementById('offcut_direction').value = '';
+                document.getElementById('dimensions').value = '';
+                document.getElementById('count').value = '10';
+                document.getElementById('notes').value = '';
+                updatePreview();
+            }
+
             async function previewArchive() {
                 const payload = buildPayload();
 
@@ -539,10 +571,12 @@ async def index():
                     document.getElementById('saveStatus');
 
                 if (!uploadId) {
+                    saveStatus.className = 'warning';
                     saveStatus.textContent =
-                        'Please select a target upload.';
+                        'Please select a target upload before saving.';
                     return;
                 }
+                saveStatus.className = 'small';
 
                 const payload = buildPayload();
 
@@ -633,9 +667,20 @@ async def index():
                         );
                     }
 
-                    saveStatus.textContent =
+                    // Link to the upload so the user can jump straight to
+                    // it, then clear the form for the next batch.
+                    const uploadUrl =
+                        nomadApiBase().replace(/\/api\/v1$/, '') +
+                        '/gui/user/uploads/upload/id/' +
+                        encodeURIComponent(uploadId);
+
+                    saveStatus.innerHTML =
                         'Saved: ' + filename +
-                        '. NOMAD processing has been triggered.';
+                        '. NOMAD processing has been triggered. ' +
+                        '<a href="' + uploadUrl + '" target="_blank">' +
+                        'View this upload &rarr;</a>';
+
+                    resetForm();
                 } catch (error) {
                     saveStatus.textContent =
                         'Error: ' + error.message;
@@ -720,7 +765,9 @@ async def index():
                     const hasUpload = Boolean(this.value);
                     document.getElementById('saveButton').disabled =
                         !hasUpload;
-                    document.getElementById('saveStatus').textContent =
+                    const status = document.getElementById('saveStatus');
+                    status.className = hasUpload ? 'small' : 'warning';
+                    status.textContent =
                         hasUpload
                             ? 'Ready to save to the selected upload.'
                             : 'Select a target upload to enable saving.';
@@ -732,3 +779,13 @@ async def index():
     </body>
     </html>
     """
+    # FIX: nomadApiBase() used to guess its own deployment base path
+    # (/nomad-oasis) by searching window.location.pathname for '/gui/' or
+    # '/dashboards/'. That breaks whenever this page is loaded in a context
+    # where neither substring is present in the URL (e.g. embedded inside
+    # NOMAD GUI v2), causing every API call to 404. The backend always
+    # knows the real base path, so inject it directly instead of guessing
+    # client-side.
+    api_base = config.services.api_base_path.rstrip('/') + '/api/v1'
+    injection = f'<script>window.NOMAD_API_BASE = {api_base!r};</script>'
+    return html.replace('<script>', injection + '<script>', 1)

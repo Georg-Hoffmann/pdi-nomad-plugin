@@ -1,4 +1,14 @@
+// FIX: this used to guess the deployment base path by searching
+// window.location.pathname for '/gui/' or '/dashboards/'. That breaks when
+// the page is loaded in a context where neither substring appears in the
+// URL (e.g. embedded inside NOMAD GUI v2), silently sending every API call
+// to the wrong, unprefixed URL (404). The backend now injects the real
+// base path as window.NOMAD_API_BASE (see processing/app.py); prefer that,
+// and only fall back to the old URL-guessing if it is ever missing.
 function nomadApiBase() {
+    if (window.NOMAD_API_BASE) {
+        return window.NOMAD_API_BASE;
+    }
     const pathname = window.location.pathname;
     const markers = ['/gui/', '/dashboards/'];
     for (const marker of markers) {
@@ -40,19 +50,73 @@ function nomadArchiveReference(uploadId, entryId) {
     return '../uploads/' + uploadId + '/archive/' + entryId + '#/data';
 }
 
+// FIX: /entries/query (the plain search endpoint) only accepts pre-indexed
+// "doc quantities" in required.include (entry_id, upload_id, results.*, ...).
+// It cannot return archive content like data.lab_id -- NOMAD rejects that
+// with 422 "data.lab_id is not a doc quantity". Archive content (anything
+// under "data") has to come from /entries/archive/query instead, which
+// takes a nested required shape: {metadata: {...}, data: {...}}.
+//
+// Still accepts the same flat 'include' list callers already pass (e.g.
+// ['entry_id', 'upload_id', 'entry_name', 'data.lab_id']) and splits it
+// internally, so no call site needs to change. Returned objects keep the
+// same shape callers already expect (entry.data.x, entry.entry_name, ...).
 async function queryEntries(schema, pageSize, include) {
-    const response = await fetch(nomadApiBase() + '/entries/query', {
+    const fields = include || ['entry_id', 'upload_id', 'entry_name'];
+    const metadataRequired = {};
+    const dataRequired = {};
+    let wantsFullData = false;
+
+    for (const field of fields) {
+        if (field === 'entry_id' || field === 'upload_id') {
+            continue;
+        }
+        if (field === 'data') {
+            wantsFullData = true;
+        } else if (field.startsWith('data.')) {
+            dataRequired[field.slice('data.'.length)] = '*';
+        } else {
+            metadataRequired[field] = '*';
+        }
+    }
+
+    const required = {};
+    if (Object.keys(metadataRequired).length) {
+        required.metadata = metadataRequired;
+    }
+    if (wantsFullData) {
+        required.data = '*';
+    } else if (Object.keys(dataRequired).length) {
+        required.data = dataRequired;
+    }
+
+    const response = await fetch(nomadApiBase() + '/entries/archive/query', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
+            // FIX: without an explicit owner NOMAD defaults to owner="public",
+            // which only returns PUBLISHED entries. Lab data lives in unpublished
+            // uploads, so every query came back empty. "visible" = public + everything
+            // the logged-in user can see (login is sent automatically via cookie).
+            owner: 'visible',
             query: {'section_defs.definition_qualified_name': schema},
             pagination: {page_size: pageSize},
-            required: {include: include}
+            required: required
         })
     });
     if (!response.ok) throw new Error('NOMAD query failed for ' + schema + ': ' + response.status);
     const result = await response.json();
-    return result.data || [];
+    return (result.data || []).map(function(entry) {
+        const archive = entry.archive || {};
+        return Object.assign(
+            {
+                entry_id: entry.entry_id,
+                upload_id: entry.upload_id,
+                data: archive.data || {}
+            },
+            archive.metadata || {}
+        );
+    });
 }
 
 function substrateStatus(substrate) {

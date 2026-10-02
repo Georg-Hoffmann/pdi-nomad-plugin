@@ -1,4 +1,15 @@
+// FIX: this used to guess the deployment base path by searching
+// window.location.pathname for '/gui/' or '/dashboards/'. That breaks when
+// the page is loaded in a context where neither substring appears in the
+// URL (e.g. embedded inside NOMAD GUI v2), silently sending every API call
+// to the wrong, unprefixed URL (404). The backend now injects the real
+// base path as window.NOMAD_API_BASE (see new_mbe_experiment/app.py);
+// prefer that, and only fall back to the old URL-guessing if missing.
 function nomadApiBase() {
+    if (window.NOMAD_API_BASE) {
+        return window.NOMAD_API_BASE;
+    }
+
     const pathname = window.location.pathname;
     const markers = ['/gui/', '/dashboards/'];
 
@@ -77,71 +88,28 @@ async function loadTreatmentHistoryEntries() {
 
     const treatments = [];
 
-
+    // FIX: was POSTing to /entries/query with required.include containing
+    // the bare word 'data', which /entries/query rejects with a 422 (it
+    // only serves indexed doc quantities, not archive content). Reuses the
+    // already-fixed queryEntriesBySchema(), which talks to
+    // /entries/archive/query instead and returns the same entry shape.
     for (const treatmentSchema of treatmentSchemas) {
-
-        const response = await fetch(
-            nomadApiBase() + '/entries/query',
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    query: {
-                        'section_defs.definition_qualified_name':
-                            treatmentSchema.schema
-                    },
-                    pagination: {
-                        page_size: 500
-                    },
-                    required: {
-                        include: [
-                            'entry_id',
-                            'upload_id',
-                            'entry_name',
-                            'data'
-                        ]
-                    }
-                })
-            }
+        const entries = await queryEntriesBySchema(
+            treatmentSchema.schema,
+            500,
+            ['entry_id', 'upload_id', 'entry_name', 'data']
         );
 
-
-        if (!response.ok) {
-            throw new Error(
-                'Treatment history query failed for ' +
-                treatmentSchema.type +
-                ': ' +
-                response.status
-            );
-        }
-
-
-        const result =
-            await response.json();
-
-
-        (result.data || []).forEach(
-            function(entry) {
-
-                treatments.push({
-                    entryId:
-                        entry.entry_id,
-                    uploadId:
-                        entry.upload_id,
-                    entryName:
-                        entry.entry_name ||
-                        entry.entry_id,
-                    type:
-                        treatmentSchema.type,
-                    label:
-                        treatmentSchema.label,
-                    data:
-                        entry.data || {}
-                });
-            }
-        );
+        entries.forEach(function(entry) {
+            treatments.push({
+                entryId: entry.entry_id,
+                uploadId: entry.upload_id,
+                entryName: entry.entry_name || entry.entry_id,
+                type: treatmentSchema.type,
+                label: treatmentSchema.label,
+                data: entry.data || {}
+            });
+        });
     }
 
 
@@ -298,6 +266,11 @@ async function loadTreatmentRecipes() {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
+                    // FIX: without an explicit owner NOMAD defaults to owner="public",
+                    // which only returns PUBLISHED entries. Lab data lives in unpublished
+                    // uploads, so every query came back empty. "visible" = public + everything
+                    // the logged-in user can see (login is sent automatically via cookie).
+                    owner: 'visible',
                     query: {
                         'section_defs.definition_qualified_name':
                             recipeSchema.schema
@@ -354,63 +327,39 @@ async function loadTreatmentRecipes() {
 }
 
 
+// FIX: was POSTing to /entries/query with required.include containing
+// data.* paths (e.g. 'data.lab_id'), which /entries/query rejects with a
+// 422 (it only serves indexed doc quantities, not archive content). Reuses
+// the already-fixed queryEntriesBySchema(), which talks to
+// /entries/archive/query instead and returns the same entry shape.
 async function loadSubstrates() {
-
-    const response = await fetch(
-        nomadApiBase() + '/entries/query',
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                query: {
-                    'section_defs.definition_qualified_name':
-                        'pdi_nomad_plugin.mbe.materials.SubstrateMbe'
-                },
-                pagination: {
-                    page_size: 500
-                },
-                required: {
-                    include: [
-                        'entry_id',
-                        'upload_id',
-                        'entry_name',
-                        'data.lab_id',
-                        'data.parent_sample',
-                        'data.material_designation',
-                        'data.chemical_formula',
-                        'data.supplier_id',
-                        'data.crystal_id',
-                        'data.charge_id',
-                        'data.polishing',
-                        'data.surface_orientation_label',
-                        'data.offcut_label',
-                        'data.offcut_direction',
-                        'data.as_delivered',
-                        'data.processed',
-                        'data.grown'
-                    ]
-                }
-            })
-        }
+    const entries = await queryEntriesBySchema(
+        'pdi_nomad_plugin.mbe.materials.SubstrateMbe',
+        500,
+        [
+            'entry_id',
+            'upload_id',
+            'entry_name',
+            'data.lab_id',
+            'data.parent_sample',
+            'data.material_designation',
+            'data.chemical_formula',
+            'data.supplier_id',
+            'data.crystal_id',
+            'data.charge_id',
+            'data.polishing',
+            'data.surface_orientation_label',
+            'data.offcut_label',
+            'data.offcut_direction',
+            'data.as_delivered',
+            'data.processed',
+            'data.grown'
+        ]
     );
 
-    if (!response.ok) {
-        throw new Error(
-            'Substrate query failed: ' +
-            response.status
-        );
-    }
+    console.log('SubstrateMbe query result:', entries);
 
-    const result = await response.json();
-
-    console.log(
-        'SubstrateMbe query result:',
-        result
-    );
-
-    return result.data || [];
+    return entries;
 }
 
 
@@ -3347,18 +3296,66 @@ let holderCatalogState = {
 let insertCatalogState = [];
 
 
+// FIX: /entries/query (the plain search endpoint) only accepts pre-indexed
+// "doc quantities" in required.include (entry_id, upload_id, results.*, ...).
+// It cannot return archive content like data.lab_id -- NOMAD rejects that
+// with 422 "data.lab_id is not a doc quantity". Archive content (anything
+// under "data") has to come from /entries/archive/query instead, which
+// takes a nested required shape: {metadata: {...}, data: {...}}.
+//
+// To avoid touching every call site, this still accepts the same flat
+// 'include' list callers already pass (e.g. ['entry_id', 'upload_id',
+// 'entry_name', 'data.lab_id', 'mainfile']) and splits it internally:
+// entry_id/upload_id are always present on the result already, 'data.x'
+// entries go under required.data, everything else (entry_name, mainfile,
+// published, ...) goes under required.metadata. The returned objects keep
+// the exact same shape callers already expect (entry.data.x, entry.entry_name, ...).
 async function queryEntriesBySchema(schema, pageSize, include) {
+    const fields = include || ['entry_id', 'upload_id', 'entry_name'];
+    const metadataRequired = {};
+    const dataRequired = {};
+
+    let wantsFullData = false;
+    for (const field of fields) {
+        if (field === 'entry_id' || field === 'upload_id') {
+            continue;
+        }
+        if (field === 'data') {
+            // Bare 'data' means 'the whole data section'.
+            wantsFullData = true;
+        } else if (field.startsWith('data.')) {
+            dataRequired[field.slice('data.'.length)] = '*';
+        } else {
+            metadataRequired[field] = '*';
+        }
+    }
+
+    const required = {};
+    if (Object.keys(metadataRequired).length) {
+        required.metadata = metadataRequired;
+    }
+    if (wantsFullData) {
+        required.data = '*';
+    } else if (Object.keys(dataRequired).length) {
+        required.data = dataRequired;
+    }
+
     const response = await fetch(
-        nomadApiBase() + '/entries/query',
+        nomadApiBase() + '/entries/archive/query',
         {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
+                // FIX: without an explicit owner NOMAD defaults to owner="public",
+                // which only returns PUBLISHED entries. Lab data lives in unpublished
+                // uploads, so every query came back empty. "visible" = public + everything
+                // the logged-in user can see (login is sent automatically via cookie).
+                owner: 'visible',
                 query: {
                     'section_defs.definition_qualified_name': schema
                 },
                 pagination: {page_size: pageSize || 500},
-                required: {include: include || ['entry_id', 'upload_id', 'entry_name']}
+                required: required
             })
         }
     );
@@ -3366,7 +3363,17 @@ async function queryEntriesBySchema(schema, pageSize, include) {
         throw new Error('NOMAD query failed for ' + schema + ': ' + response.status);
     }
     const result = await response.json();
-    return result.data || [];
+    return (result.data || []).map(function(entry) {
+        const archive = entry.archive || {};
+        return Object.assign(
+            {
+                entry_id: entry.entry_id,
+                upload_id: entry.upload_id,
+                data: archive.data || {}
+            },
+            archive.metadata || {}
+        );
+    });
 }
 
 
@@ -3377,6 +3384,11 @@ async function queryExperimentHolderReferences() {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
+                // FIX: without an explicit owner NOMAD defaults to owner="public",
+                // which only returns PUBLISHED entries. Lab data lives in unpublished
+                // uploads, so every query came back empty. "visible" = public + everything
+                // the logged-in user can see (login is sent automatically via cookie).
+                owner: 'visible',
                 query: {
                     'section_defs.definition_qualified_name':
                         'pdi_nomad_plugin.mbe.processes.ExperimentMbePDI'
