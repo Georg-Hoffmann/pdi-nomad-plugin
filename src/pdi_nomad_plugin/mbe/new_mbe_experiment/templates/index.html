@@ -18,24 +18,25 @@
         <div class="card workflow-card">
             <h2>Holder setup</h2>
 
-            <label for="holderSelect">Holder</label>
+            <label for="holderSelect">1.) Holder</label>
             <select id="holderSelect" onchange="selectHolder()">
                 <option value="">Loading holders...</option>
             </select>
             <p id="holderCatalogStatus" class="small"></p>
 
-            <label for="targetUpload">Target upload</label>
+            <label for="targetUpload">2.) Target upload</label>
             <select id="targetUpload">
                 <option value="">Loading uploads...</option>
             </select>
             <p id="uploadStatus" class="small">Loading writable NOMAD uploads...</p>
 
+            <div class="workflow-step-title">3.) Save filled holder / empty filled holder</div>
             <div class="button-stack">
-                <button id="saveFilledHolderButton" class="secondary" type="button" onclick="saveFilledHolderToNomad()">
+                <button id="saveFilledHolderButton" class="primary" type="button" onclick="saveFilledHolderToNomad()">
                     Save filled holder
                 </button>
                 <button id="emptyHolderButton" class="secondary danger-outline" type="button" onclick="emptyCurrentHolder()">
-                    Empty holder
+                    Empty filled holder
                 </button>
             </div>
             <p id="filledHolderSaveStatus" class="small">
@@ -44,10 +45,10 @@
 
             <hr>
 
-            <h2>Experiment</h2>
-            <label for="growthRunId">Growth Run ID</label>
+            <label for="growthRunId">4.) Growth Run ID</label>
             <input id="growthRunId" placeholder="e.g. m84325" oninput="updateGrowthRunId()">
 
+            <div class="workflow-step-title">5.) Save experiment</div>
             <button id="saveExperimentButton" class="primary full-width" type="button" onclick="saveExperimentToNomad()">
                 Save experiment
             </button>
@@ -80,7 +81,29 @@
                 <img id="holderImage" alt="Substrate holder">
             </div>
 
-            <div id="holderGrid" class="holder-grid"></div>
+            <div class="holder-workspace">
+                <div class="holder-visual-column">
+                    <div id="holderGrid" class="holder-grid"></div>
+                </div>
+
+                <div class="holder-history-column">
+                    <div
+                        id="positionControlsPanel"
+                        class="right-side-position-panel"
+                    ></div>
+                    <div class="treatment-history">
+                        <div class="picker-heading">
+                            <h3>Existing treatment history</h3>
+                            <button id="openProcessingButton" class="secondary" type="button" onclick="openSelectedSubstrateInProcessing()" disabled>
+                                Open in Substrate Processing
+                            </button>
+                        </div>
+                        <div id="treatmentHistory" class="treatment-history-list">
+                            <p class="small">Select a substrate to view its history.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <div id="substratePicker" class="substrate-picker" style="display:none;">
                 <div class="picker-heading">
@@ -88,9 +111,6 @@
                         <h2>Substrate selection</h2>
                         <p id="activePositionLabel" class="small"></p>
                     </div>
-                    <button class="secondary" type="button" onclick="refreshSubstrateData()">
-                        Refresh substrate data
-                    </button>
                 </div>
 
                 <label for="substrateSearch">Substrate ID / search</label>
@@ -125,59 +145,6 @@
                             <option value="processed">Processed</option>
                             <option value="grown">Grown</option>
                         </select>
-                    </div>
-                </div>
-
-                <div class="treatment-history">
-                    <div class="picker-heading">
-                        <h3>Existing treatment history</h3>
-                        <button id="openProcessingButton" class="secondary" type="button" onclick="openSelectedSubstrateInProcessing()" disabled>
-                            Open in Substrate Processing
-                        </button>
-                    </div>
-                    <div id="treatmentHistory" class="treatment-history-list">
-                        <p class="small">Select a substrate to view its history.</p>
-                    </div>
-                </div>
-
-                <div class="treatment-editor">
-                    <h3>Split substrate</h3>
-                    <p class="small">
-                        Record a substrate-cut step and create child substrates from the selected substrate.
-                    </p>
-                    <div class="split-grid">
-                        <div>
-                            <label for="splitCount">Number of children</label>
-                            <input id="splitCount" type="number" min="2" step="1" value="4">
-                        </div>
-                        <div>
-                            <label for="splitWidth">Child width [mm]</label>
-                            <input id="splitWidth" type="number" min="0" step="0.1" value="5">
-                        </div>
-                        <div>
-                            <label for="splitLength">Child length [mm]</label>
-                            <input id="splitLength" type="number" min="0" step="0.1" value="5">
-                        </div>
-                        <div>
-                            <label for="splitThickness">Child thickness [mm]</label>
-                            <input id="splitThickness" type="number" min="0" step="0.01" placeholder="e.g. 0.5">
-                        </div>
-                    </div>
-                    <label for="splitDateTime">Date / time</label>
-                    <input id="splitDateTime" type="datetime-local">
-                    <label for="splitNotes">Notes</label>
-                    <textarea id="splitNotes" placeholder="Optional notes about the cut"></textarea>
-                    <button id="splitSubstrateButton" class="secondary full-width" type="button" onclick="saveSubstrateSplit()">
-                        Create child substrates
-                    </button>
-                    <p id="splitSubstrateStatus" class="small">Select a substrate before creating a cut.</p>
-                    <div id="splitChildPicker" style="display:none; margin-top:14px;">
-                        <h3>Child substrates</h3>
-                        <p class="small">Select which child substrate goes into the active holder position.</p>
-                        <div id="splitChildResults" class="treatment-history-list"></div>
-                        <button id="refreshSplitChildrenButton" class="secondary full-width" type="button" onclick="refreshSplitChildren()">
-                            Refresh child substrates
-                        </button>
                     </div>
                 </div>
 

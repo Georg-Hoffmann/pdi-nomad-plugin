@@ -353,7 +353,8 @@ async function loadSubstrates() {
             'data.offcut_direction',
             'data.as_delivered',
             'data.processed',
-            'data.grown'
+            'data.grown',
+            'data.geometry'
         ]
     );
 
@@ -410,7 +411,6 @@ async function loadHolders() {
 
 
 let substrateCatalogState = [];
-let splitChildSelectionState = null;
 let treatmentHistoryState = [];
 
 
@@ -544,7 +544,46 @@ function updateSubstrateFilters() {
 }
 
 
+function cutParentEntryIds() {
+    const parentIds = new Set();
+
+    substrateCatalogState.forEach(
+        function(substrate) {
+            const parentEntryId =
+                referenceEntryId(
+                    substrate.parentSample
+                );
+
+            if (parentEntryId) {
+                parentIds.add(
+                    parentEntryId
+                );
+            }
+        }
+    );
+
+    return parentIds;
+}
+
+
+function substrateHasBeenCut(substrate) {
+    if (
+        !substrate ||
+        !substrate.entryId
+    ) {
+        return false;
+    }
+
+    return cutParentEntryIds().has(
+        substrate.entryId
+    );
+}
+
+
 function filteredSubstrates() {
+
+    const cutParents =
+        cutParentEntryIds();
 
     const search =
         document.getElementById(
@@ -586,6 +625,18 @@ function filteredSubstrates() {
 
     return substrateCatalogState.filter(
         function(substrate) {
+
+            /*
+             * Once child samples reference this substrate as their
+             * parent, the original physical piece no longer exists.
+             */
+            if (
+                cutParents.has(
+                    substrate.entryId
+                )
+            ) {
+                return false;
+            }
 
             const searchable = [
                 substrate.labId,
@@ -781,7 +832,14 @@ function renderSubstrateResults() {
 
 
     const substrates =
-        filteredSubstrates();
+        filteredSubstrates().filter(
+            function(substrate) {
+                return substrateFitsPosition(
+                    substrate,
+                    position
+                );
+            }
+        );
 
 
     if (substrates.length === 0) {
@@ -965,7 +1023,9 @@ async function initialiseSubstrates() {
                         grown:
                             Boolean(
                                 data.grown
-                            )
+                            ),
+                        geometry:
+                            data.geometry || null
                     };
                 }
             );
@@ -973,7 +1033,6 @@ async function initialiseSubstrates() {
 
         updateSubstrateFilters();
         renderSubstrateResults();
-        renderSplitChildResults();
 
     } catch (error) {
 
@@ -1796,728 +1855,6 @@ function getActivePosition() {
     return experimentState.positions[
         experimentState.activePositionName
     ] || null;
-}
-
-
-function substrateSplitGeometry(
-    widthMm,
-    lengthMm,
-    thicknessMm
-) {
-
-    const width =
-        Number(widthMm);
-
-    const length =
-        Number(lengthMm);
-
-    const thickness =
-        Number(thicknessMm);
-
-
-    if (
-        !Number.isFinite(width) ||
-        !Number.isFinite(length) ||
-        !Number.isFinite(thickness) ||
-        width <= 0 ||
-        length <= 0 ||
-        thickness <= 0
-    ) {
-        throw new Error(
-            'Child width, length and thickness ' +
-            'must all be positive numbers.'
-        );
-    }
-
-
-    const widthM =
-        width / 1000;
-
-    const lengthM =
-        length / 1000;
-
-    const thicknessM =
-        thickness / 1000;
-
-
-    if (
-        Math.abs(
-            width - length
-        ) < 1e-9
-    ) {
-        return {
-            m_def:
-                'nomad_material_processing.general.' +
-                'SquareCuboid',
-            width:
-                widthM,
-            height:
-                thicknessM
-        };
-    }
-
-
-    return {
-        m_def:
-            'nomad_material_processing.general.' +
-            'RectangleCuboid',
-        width:
-            widthM,
-        length:
-            lengthM,
-        height:
-            thicknessM
-    };
-}
-
-
-function setDefaultSplitDateTime() {
-
-    const input =
-        document.getElementById(
-            'splitDateTime'
-        );
-
-    if (
-        !input ||
-        input.value
-    ) {
-        return;
-    }
-
-
-    const now =
-        new Date();
-
-    const local =
-        new Date(
-            now.getTime() -
-            now.getTimezoneOffset() *
-            60000
-        )
-            .toISOString()
-            .slice(0, 16);
-
-    input.value =
-        local;
-}
-
-
-function predictedChildLabIds(
-    substrate,
-    count
-) {
-
-    const parentId =
-        substrate.labId ||
-        substrate.entryName ||
-        substrate.entryId;
-
-    const result = [];
-
-    for (
-        let index = 1;
-        index <= count;
-        index += 1
-    ) {
-        result.push(
-            parentId +
-            '.' +
-            String(index)
-        );
-    }
-
-    return result;
-}
-
-
-function expectedSplitChildIds() {
-
-    if (!splitChildSelectionState) {
-        return [];
-    }
-
-    const ids = [];
-
-    for (
-        let index = 1;
-        index <= splitChildSelectionState.count;
-        index += 1
-    ) {
-        ids.push(
-            splitChildSelectionState.parentLabId +
-            '.' +
-            String(index)
-        );
-    }
-
-    return ids;
-}
-
-
-function splitChildSubstrates() {
-
-    const expectedIds =
-        expectedSplitChildIds();
-
-    if (expectedIds.length === 0) {
-        return [];
-    }
-
-    return substrateCatalogState
-        .filter(
-            function(substrate) {
-                return expectedIds.includes(
-                    substrate.labId
-                );
-            }
-        )
-        .sort(
-            function(a, b) {
-                return String(a.labId).localeCompare(
-                    String(b.labId),
-                    undefined,
-                    {
-                        numeric: true
-                    }
-                );
-            }
-        );
-}
-
-
-function renderSplitChildResults() {
-
-    const picker =
-        document.getElementById(
-            'splitChildPicker'
-        );
-
-    const container =
-        document.getElementById(
-            'splitChildResults'
-        );
-
-    if (
-        !picker ||
-        !container
-    ) {
-        return;
-    }
-
-
-    container.innerHTML = '';
-
-
-    if (!splitChildSelectionState) {
-
-        picker.style.display =
-            'none';
-
-        return;
-    }
-
-
-    picker.style.display =
-        'block';
-
-
-    const expectedIds =
-        expectedSplitChildIds();
-
-    const children =
-        splitChildSubstrates();
-
-
-    if (children.length === 0) {
-
-        const message =
-            document.createElement('p');
-
-        message.className =
-            'small';
-
-        message.textContent =
-            'No child substrates are indexed yet. ' +
-            'Expected: ' +
-            expectedIds.join(', ') +
-            '. Use Refresh child substrates.';
-
-        container.appendChild(
-            message
-        );
-
-        return;
-    }
-
-
-    children.forEach(
-        function(substrate) {
-
-            const row =
-                document.createElement(
-                    'div'
-                );
-
-            row.className =
-                'substrate-result';
-
-
-            const title =
-                document.createElement(
-                    'div'
-                );
-
-            title.style.fontWeight =
-                'bold';
-
-            title.textContent =
-                substrate.labId;
-
-            row.appendChild(
-                title
-            );
-
-
-            const details =
-                document.createElement(
-                    'div'
-                );
-
-            details.className =
-                'small';
-
-            const parts = [
-                substrate.material,
-                substrate.orientation,
-                substrate.offcut,
-                substrate.offcutDirection,
-                substrateStatus(
-                    substrate
-                )
-            ].filter(Boolean);
-
-            details.textContent =
-                parts.join(' | ');
-
-            row.appendChild(
-                details
-            );
-
-
-            const button =
-                document.createElement(
-                    'button'
-                );
-
-            button.type =
-                'button';
-
-            button.className =
-                'secondary';
-
-            button.style.marginTop =
-                '8px';
-
-            button.textContent =
-                'Use ' +
-                substrate.labId +
-                ' in holder';
-
-
-            button.addEventListener(
-                'click',
-                function(event) {
-
-                    event.stopPropagation();
-
-                    selectSubstrate(
-                        substrate
-                    );
-
-                    const status =
-                        document.getElementById(
-                            'splitSubstrateStatus'
-                        );
-
-                    status.textContent =
-                        substrate.labId +
-                        ' selected for the active ' +
-                        'holder position.';
-                }
-            );
-
-
-            row.appendChild(
-                button
-            );
-
-            container.appendChild(
-                row
-            );
-        }
-    );
-
-
-    if (
-        children.length <
-        expectedIds.length
-    ) {
-
-        const pending =
-            expectedIds.filter(
-                function(id) {
-                    return !children.some(
-                        function(child) {
-                            return (
-                                child.labId === id
-                            );
-                        }
-                    );
-                }
-            );
-
-        const message =
-            document.createElement('p');
-
-        message.className =
-            'small';
-
-        message.textContent =
-            'Still waiting for: ' +
-            pending.join(', ');
-
-        container.appendChild(
-            message
-        );
-    }
-}
-
-
-async function refreshSplitChildren() {
-
-    const button =
-        document.getElementById(
-            'refreshSplitChildrenButton'
-        );
-
-    const status =
-        document.getElementById(
-            'splitSubstrateStatus'
-        );
-
-
-    if (!splitChildSelectionState) {
-
-        status.textContent =
-            'No substrate cut has been created yet.';
-
-        return;
-    }
-
-
-    button.disabled =
-        true;
-
-    status.textContent =
-        'Refreshing child substrates...';
-
-
-    try {
-
-        await initialiseSubstrates();
-
-        renderSplitChildResults();
-
-
-        const children =
-            splitChildSubstrates();
-
-        const expected =
-            expectedSplitChildIds();
-
-
-        if (
-            children.length ===
-            expected.length
-        ) {
-
-            status.textContent =
-                'All child substrates are available.';
-
-        } else {
-
-            status.textContent =
-                String(children.length) +
-                ' of ' +
-                String(expected.length) +
-                ' child substrates are available.';
-        }
-
-    } catch (error) {
-
-        status.textContent =
-            'Error refreshing child substrates: ' +
-            error.message;
-
-    } finally {
-
-        button.disabled =
-            false;
-    }
-}
-
-
-async function saveSubstrateSplit() {
-
-    const status =
-        document.getElementById(
-            'splitSubstrateStatus'
-        );
-
-    const button =
-        document.getElementById(
-            'splitSubstrateButton'
-        );
-
-    const position =
-        getActivePosition();
-
-
-    if (
-        !position ||
-        !position.substrate
-    ) {
-        status.textContent =
-            'Select a substrate first.';
-        return;
-    }
-
-
-    const substrate =
-        position.substrate;
-
-
-    if (
-        !substrate.uploadId ||
-        !substrate.entryId
-    ) {
-        status.textContent =
-            'Selected substrate has no complete NOMAD reference.';
-        return;
-    }
-
-
-    const uploadId =
-        document.getElementById(
-            'targetUpload'
-        ).value;
-
-
-    if (!uploadId) {
-        status.textContent =
-            'Select a target upload first.';
-        return;
-    }
-
-
-    const count =
-        Number(
-            document.getElementById(
-                'splitCount'
-            ).value
-        );
-
-
-    if (
-        !Number.isInteger(count) ||
-        count < 2
-    ) {
-        status.textContent =
-            'Number of child substrates must be at least 2.';
-        return;
-    }
-
-
-    let geometry;
-
-    try {
-
-        geometry =
-            substrateSplitGeometry(
-                document.getElementById(
-                    'splitWidth'
-                ).value,
-                document.getElementById(
-                    'splitLength'
-                ).value,
-                document.getElementById(
-                    'splitThickness'
-                ).value
-            );
-
-    } catch (error) {
-
-        status.textContent =
-            'Error: ' +
-            error.message;
-
-        return;
-    }
-
-
-    const datetimeInput =
-        document.getElementById(
-            'splitDateTime'
-        ).value;
-
-    const notes =
-        document.getElementById(
-            'splitNotes'
-        ).value.trim();
-
-
-    let datetime =
-        new Date().toISOString();
-
-    if (datetimeInput) {
-        datetime =
-            new Date(
-                datetimeInput
-            ).toISOString();
-    }
-
-
-    const parentName =
-        substrate.labId ||
-        substrate.entryName ||
-        substrate.entryId;
-
-
-    const data = {
-        m_def:
-            'pdi_nomad_plugin.general.schema.' +
-            'SampleCutPDI',
-
-        name:
-            parentName +
-            ' - substrate cut',
-
-        datetime:
-            datetime,
-
-        number_of_samples:
-            count,
-
-        parent_sample: {
-            name:
-                parentName,
-
-            reference:
-                nomadArchiveReference(
-                    substrate.uploadId,
-                    substrate.entryId
-                )
-        },
-
-        children_geometry:
-            geometry,
-
-        trigger_cut_sample:
-            true
-    };
-
-
-    if (notes) {
-        data.description =
-            notes;
-    }
-
-
-    const timestamp =
-        datetime
-            .replace(
-                /[:.]/g,
-                '-'
-            );
-
-    const filename =
-        experimentSafePart(
-            parentName
-        ) +
-        '.SampleCut.' +
-        timestamp +
-        '.archive.yaml';
-
-
-    button.disabled =
-        true;
-
-    status.textContent =
-        'Saving substrate cut...';
-
-
-    try {
-
-        await uploadArchiveData(
-            uploadId,
-            filename,
-            data
-        );
-
-
-        const childIds =
-            predictedChildLabIds(
-                substrate,
-                count
-            );
-
-
-        splitChildSelectionState = {
-            parentLabId:
-                parentName,
-            count:
-                count
-        };
-
-
-        status.textContent =
-            'Cut saved. Expected child substrates: ' +
-            childIds.join(', ') +
-            '. NOMAD processing was triggered.';
-
-
-        /*
-         * Reload the substrate catalogue.
-         * New child entries may not be indexed immediately,
-         * so they may appear only after a later refresh.
-         */
-        try {
-
-            await initialiseSubstrates();
-
-            renderSubstrateResults();
-            renderSplitChildResults();
-
-        } catch (refreshError) {
-
-            console.warn(
-                'Substrate catalogue refresh failed:',
-                refreshError
-            );
-        }
-
-    } catch (error) {
-
-        status.textContent =
-            'Error: ' +
-            error.message;
-
-    } finally {
-
-        button.disabled =
-            false;
-    }
 }
 
 
@@ -3512,14 +2849,24 @@ async function loadInsertCatalogV2() {
         const entries = await queryEntriesBySchema(
             'pdi_nomad_plugin.mbe.instrument.InsertReductionPDI',
             200,
-            ['entry_id', 'upload_id', 'entry_name', 'data.lab_id', 'data.name']
+            [
+                'entry_id',
+                'upload_id',
+                'entry_name',
+                'data.lab_id',
+                'data.name',
+                'data.inner_geometry',
+                'data.outer_geometry'
+            ]
         );
         insertCatalogState = entries.map(function(entry) {
             const data = entry.data || {};
             return {
                 entryId: entry.entry_id,
                 uploadId: entry.upload_id,
-                name: data.lab_id || data.name || entry.entry_name || entry.entry_id
+                name: data.lab_id || data.name || entry.entry_name || entry.entry_id,
+                innerGeometry: data.inner_geometry || null,
+                outerGeometry: data.outer_geometry || null
             };
         });
     } catch (error) {
@@ -3787,6 +3134,189 @@ function positionCoordinates(position) {
 }
 
 
+
+function geometryNumber(value) {
+    if (
+        typeof value === 'number' &&
+        Number.isFinite(value)
+    ) {
+        return value;
+    }
+
+    if (
+        value &&
+        typeof value === 'object' &&
+        typeof value.magnitude === 'number' &&
+        Number.isFinite(value.magnitude)
+    ) {
+        return value.magnitude;
+    }
+
+    const parsed = Number(value);
+
+    return Number.isFinite(parsed)
+        ? parsed
+        : null;
+}
+
+
+function geometryXY(geometry) {
+    if (
+        !geometry ||
+        typeof geometry !== 'object'
+    ) {
+        return null;
+    }
+
+    const width =
+        geometryNumber(geometry.width);
+
+    let length =
+        geometryNumber(geometry.length);
+
+    if (!Number.isFinite(width)) {
+        return null;
+    }
+
+    if (!Number.isFinite(length)) {
+        length = width;
+    }
+
+    return {
+        width: width,
+        length: length
+    };
+}
+
+
+function geometryMatches(first, second) {
+    const a = geometryXY(first);
+    const b = geometryXY(second);
+
+    if (!a || !b) {
+        return false;
+    }
+
+    const tolerance = 0.00005;
+
+    const direct =
+        Math.abs(a.width - b.width) <= tolerance &&
+        Math.abs(a.length - b.length) <= tolerance;
+
+    const rotated =
+        Math.abs(a.width - b.length) <= tolerance &&
+        Math.abs(a.length - b.width) <= tolerance;
+
+    return direct || rotated;
+}
+
+
+function effectivePositionGeometry(position) {
+    if (
+        position &&
+        position.insertReduction &&
+        position.insertReduction.innerGeometry
+    ) {
+        return position.insertReduction.innerGeometry;
+    }
+
+    return position
+        ? position.slot_geometry
+        : null;
+}
+
+
+function insertFitsPosition(insert, position) {
+    if (!insert || !position) {
+        return false;
+    }
+
+    if (!geometryXY(position.slot_geometry)) {
+        return true;
+    }
+
+    if (!geometryXY(insert.outerGeometry)) {
+        return false;
+    }
+
+    return geometryMatches(
+        insert.outerGeometry,
+        position.slot_geometry
+    );
+}
+
+
+function substrateFitsPosition(substrate, position) {
+    if (!substrate || !position) {
+        return false;
+    }
+
+    const target =
+        effectivePositionGeometry(position);
+
+    if (!geometryXY(target)) {
+        return true;
+    }
+
+    if (!geometryXY(substrate.geometry)) {
+        return false;
+    }
+
+    return geometryMatches(
+        substrate.geometry,
+        target
+    );
+}
+
+
+function insertWindowPercent(position) {
+    if (
+        !position ||
+        !position.insertReduction
+    ) {
+        return null;
+    }
+
+    const inner =
+        geometryXY(
+            position.insertReduction.innerGeometry
+        );
+
+    const outer =
+        geometryXY(
+            position.insertReduction.outerGeometry
+        );
+
+    if (!inner || !outer) {
+        return null;
+    }
+
+    if (
+        outer.width <= 0 ||
+        outer.length <= 0
+    ) {
+        return null;
+    }
+
+    return {
+        width: Math.max(
+            10,
+            Math.min(
+                100,
+                100 * inner.width / outer.width
+            )
+        ),
+        height: Math.max(
+            10,
+            Math.min(
+                100,
+                100 * inner.length / outer.length
+            )
+        )
+    };
+}
+
+
 function positionDisplayState(position) {
     if (!position.position_usage) return 'empty';
     if (position.position_usage === 'substrate') {
@@ -3817,7 +3347,14 @@ function selectHolderPosition(positionName) {
 
 function renderHolder() {
     const grid = document.getElementById('holderGrid');
+
+    const positionControlsPanel =
+        document.getElementById('positionControlsPanel');
     grid.innerHTML = '';
+
+    if (positionControlsPanel) {
+        positionControlsPanel.innerHTML = '';
+    }
     if (!experimentState.holder) return;
 
     const names = Object.keys(experimentState.positions);
@@ -3850,14 +3387,23 @@ function renderHolder() {
         slot.innerHTML =
             '<span class="holder-slot-name">' + escapeHtml(item.name) + '</span>' +
             '<span class="holder-slot-state">' + escapeHtml(positionDisplayState(position)) + '</span>';
-        slot.addEventListener('click', function() { selectHolderPosition(item.name); });
+
+        const insertSize = insertWindowPercent(position);
+
+        if (insertSize) {
+            const insertWindow = document.createElement('span');
+            insertWindow.className = 'holder-insert-window';
+            insertWindow.style.width = insertSize.width + '%';
+            insertWindow.style.height = insertSize.height + '%';
+            slot.appendChild(insertWindow);
+        }
+
+        slot.addEventListener('click', function() {
+            selectHolderPosition(item.name);
+        });
         disc.appendChild(slot);
     });
 
-    const label = document.createElement('div');
-    label.className = 'holder-disc-label';
-    label.textContent = experimentState.holder.id;
-    disc.appendChild(label);
     grid.appendChild(disc);
 
     if (!experimentState.activePositionName || !experimentState.positions[experimentState.activePositionName]) {
@@ -3897,7 +3443,14 @@ function renderHolder() {
         controls.appendChild(insertLabel);
         const insertSelect = document.createElement('select');
         insertSelect.innerHTML = '<option value="">No insert</option>';
-        insertCatalogState.forEach(function(insert) {
+        insertCatalogState
+            .filter(function(insert) {
+                return insertFitsPosition(
+                    insert,
+                    position
+                );
+            })
+            .forEach(function(insert) {
             const option = document.createElement('option');
             option.value = insert.entryId;
             option.textContent = insert.name;
@@ -3908,13 +3461,42 @@ function renderHolder() {
             position.insertReduction = insertCatalogState.find(function(insert) {
                 return insert.entryId === insertSelect.value;
             }) || null;
+
+            if (
+                position.substrate &&
+                geometryXY(position.substrate.geometry) &&
+                !substrateFitsPosition(
+                    position.substrate,
+                    position
+                )
+            ) {
+                position.substrate = null;
+                position.pendingTreatments = [];
+            }
+
             experimentState.currentFilledDirty = true;
+
+            renderHolder();
+
+            if (
+                position.position_usage ===
+                'substrate'
+            ) {
+                renderSubstrateResults();
+                renderTreatmentHistory();
+            }
+
+            updateProcessingButtonV2();
             updateStatePreview();
         });
         controls.appendChild(insertSelect);
     }
 
-    grid.appendChild(controls);
+    if (positionControlsPanel) {
+        positionControlsPanel.appendChild(controls);
+    } else {
+        grid.appendChild(controls);
+    }
 }
 
 
@@ -3963,7 +3545,8 @@ selectSubstrate = function(substrate) {
         offcutDirection: substrate.offcutDirection,
         asDelivered: substrate.asDelivered,
         processed: substrate.processed,
-        grown: substrate.grown
+        grown: substrate.grown,
+        geometry: substrate.geometry || null
     };
     position.pendingTreatments = [];
     experimentState.currentFilledDirty = true;
@@ -3972,6 +3555,12 @@ selectSubstrate = function(substrate) {
     renderTreatmentHistory();
     updateProcessingButtonV2();
     updateStatePreview();
+
+    // Re-read the selected substrate and related treatment state from NOMAD
+    // without doing a browser reload, which would discard the unsaved holder.
+    refreshSubstrateData().catch(function(error) {
+        console.error('Could not refresh substrate data after selection:', error);
+    });
 };
 
 
@@ -4007,8 +3596,32 @@ async function refreshSubstrateData() {
     const selectedId = position && position.substrate ? position.substrate.entryId : null;
     await Promise.all([initialiseSubstrates(), initialiseTreatmentHistory()]);
     if (selectedId && position) {
-        const refreshed = substrateCatalogState.find(function(item) { return item.entryId === selectedId; });
-        if (refreshed) position.substrate = Object.assign({}, refreshed);
+        const refreshed =
+            substrateCatalogState.find(
+                function(item) {
+                    return (
+                        item.entryId ===
+                        selectedId
+                    );
+                }
+            );
+
+        if (
+            refreshed &&
+            substrateHasBeenCut(
+                refreshed
+            )
+        ) {
+            position.substrate = null;
+            position.pendingTreatments = [];
+            experimentState.currentFilledDirty = true;
+        } else if (refreshed) {
+            position.substrate =
+                Object.assign(
+                    {},
+                    refreshed
+                );
+        }
     }
     renderSubstrateResults();
     renderTreatmentHistory();
@@ -4040,6 +3653,23 @@ function filledHolderArchiveData() {
             if (!position.substrate) {
                 throw new Error('Position ' + positionName + ' is marked as substrate but no substrate is selected.');
             }
+
+            if (
+                substrateHasBeenCut(
+                    position.substrate
+                )
+            ) {
+                throw new Error(
+                    'Substrate ' +
+                    (
+                        position.substrate.labId ||
+                        position.substrate.entryName ||
+                        position.substrate.entryId
+                    ) +
+                    ' has been cut into child samples and is no longer physically available.'
+                );
+            }
+
             let ref = position.substrate.reference || '';
             if (!ref) {
                 if (!position.substrate.uploadId || !position.substrate.entryId) {
@@ -4093,6 +3723,7 @@ async function uploadArchiveDataV2(uploadId, filename, data, overwrite) {
     params.append('file_name', filename);
     params.append('overwrite_if_exists', overwrite ? 'true' : 'false');
     params.append('trigger_processing', 'true');
+    params.append('wait_for_processing', 'true');
     const response = await fetch(
         nomadApiBase() + '/uploads/' + encodeURIComponent(uploadId) + '/raw/?' + params.toString(),
         {
@@ -4173,6 +3804,24 @@ async function saveFilledHolderToNomad(options) {
         experimentState.currentFilledDirty = false;
         if (status && !options.silent) status.textContent = 'Filled holder saved. You can close the app and continue later.';
         updateStatePreview();
+
+        await refreshSubstrateData();
+        await initialiseHolderSelect();
+
+        const holderSelect =
+            document.getElementById('holderSelect');
+
+        if (
+            holderSelect &&
+            Array.from(holderSelect.options).some(
+                function(option) {
+                    return option.value === entryId;
+                }
+            )
+        ) {
+            holderSelect.value = entryId;
+        }
+
         return nomadArchiveReference(uploadId, entryId);
     } catch (error) {
         if (status && !options.silent) status.textContent = 'Error: ' + error.message;
@@ -4216,6 +3865,11 @@ async function saveExperimentToNomad() {
             'Experiment saved. NOMAD processing was triggered; linked substrates will be marked grown by the ExperimentMbePDI normalizer.';
         document.getElementById('startNewExperimentButton').style.display = 'block';
         updateStatePreview();
+
+        await refreshSubstrateData();
+        await initialiseHolderSelect();
+
+        window.location.reload();
     } catch (error) {
         status.textContent = (filledSavedThisAttempt ?
             'Filled holder was saved, but the experiment failed: ' : 'Error: ') + error.message;
@@ -4304,7 +3958,6 @@ function updateCombinedId() {
 async function initialiseWorkflowV2() {
     loadUploads();
     initialiseSubstrateFilterEvents();
-    setDefaultSplitDateTime();
     await Promise.all([
         initialiseSubstrates(),
         initialiseTreatmentHistory(),

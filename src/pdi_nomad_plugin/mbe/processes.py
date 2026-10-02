@@ -1612,9 +1612,7 @@ class ExperimentMbePDI(Experiment, EntryData):
                             logger,
                             as_delivered=False,
                             fresh=False,
-                            processed=sample_holder_position.substrate.reference.grown
-                            if sample_holder_position.substrate.reference.grown
-                            else False,
+                            processed=sample_holder_position.substrate.reference.processed,
                             grown=True,
                         )
 

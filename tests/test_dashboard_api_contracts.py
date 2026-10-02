@@ -1,6 +1,6 @@
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -164,6 +164,171 @@ class DashboardApiContractTests(unittest.TestCase):
                     schema,
                     text(path),
                 )
+
+
+    def test_growth_preserves_processed_state(self):
+        processes = text(
+            ROOT / "src/pdi_nomad_plugin/mbe/processes.py"
+        )
+
+        self.assertIn(
+            "processed=sample_holder_position.substrate.reference.processed",
+            processes,
+        )
+
+        self.assertNotIn(
+            "processed=sample_holder_position.substrate.reference.grown",
+            processes,
+        )
+
+        self.assertIn(
+            "grown=True",
+            processes,
+        )
+
+    def test_new_mbe_contains_no_substrate_cut_ui_or_logic(self):
+        mbe_js = text(NEW_MBE_JS)
+        mbe_html = text(
+            ROOT
+            / "src/pdi_nomad_plugin/mbe/new_mbe_experiment/templates/index.html"
+        )
+
+        forbidden = [
+            "saveSubstrateSplit",
+            "refreshSplitChildren",
+            "substrateSplitGeometry",
+            "splitChildSelectionState",
+            'id="splitSubstrateButton"',
+            'id="splitChildPicker"',
+            "SampleCutPDI",
+        ]
+
+        for value in forbidden:
+            with self.subTest(value=value):
+                self.assertNotIn(value, mbe_js)
+                self.assertNotIn(value, mbe_html)
+
+        # The backend schema is deliberately retained because cutting will
+        # later move into the Substrate Processing dashboard.
+        processes = text(
+            ROOT / "src/pdi_nomad_plugin/mbe/processes.py"
+        )
+        self.assertIn("SampleCutPDI", processes)
+
+
+    def test_new_mbe_insert_geometry_and_layout_contract(self):
+        repo_root = Path(__file__).resolve().parents[1]
+
+        base = (
+            repo_root
+            / "src"
+            / "pdi_nomad_plugin"
+            / "mbe"
+            / "new_mbe_experiment"
+        )
+
+        app = (base / "static/app.js").read_text(
+            encoding="utf-8-sig"
+        )
+        css = (base / "static/styles.css").read_text(
+            encoding="utf-8-sig"
+        )
+        html = (base / "templates/index.html").read_text(
+            encoding="utf-8-sig"
+        )
+
+        self.assertIn("'data.geometry'", app)
+        self.assertIn("'data.inner_geometry'", app)
+        self.assertIn("'data.outer_geometry'", app)
+
+        self.assertIn(
+            "function geometryMatches(",
+            app,
+        )
+        self.assertIn(
+            "function insertFitsPosition(",
+            app,
+        )
+        self.assertIn(
+            "function substrateFitsPosition(",
+            app,
+        )
+        self.assertIn(
+            "geometry: substrate.geometry || null",
+            app,
+        )
+
+        self.assertIn(
+            "holder-insert-window",
+            app,
+        )
+        self.assertIn(
+            ".holder-insert-window",
+            css,
+        )
+
+        self.assertIn(
+            'id="positionControlsPanel"',
+            html,
+        )
+        self.assertIn(
+            "positionControlsPanel.appendChild(controls)",
+            app,
+        )
+
+        self.assertIn(
+            "/* FINAL compact holder layout */",
+            css,
+        )
+        self.assertIn(
+            "width: 250px !important;",
+            css,
+        )
+        self.assertIn(
+            "height: 250px !important;",
+            css,
+        )
+
+
+    def test_cut_parent_substrate_is_not_selectable(self):
+        repo_root = Path(__file__).resolve().parents[1]
+
+        app = (
+            repo_root
+            / "src"
+            / "pdi_nomad_plugin"
+            / "mbe"
+            / "new_mbe_experiment"
+            / "static"
+            / "app.js"
+        ).read_text(
+            encoding="utf-8-sig"
+        )
+
+        self.assertIn(
+            "'data.parent_sample'",
+            app,
+        )
+
+        self.assertIn(
+            "function cutParentEntryIds()",
+            app,
+        )
+
+        self.assertIn(
+            "function substrateHasBeenCut(",
+            app,
+        )
+
+        self.assertIn(
+            "cutParents.has(",
+            app,
+        )
+
+        self.assertIn(
+            "has been cut into child samples and is no longer physically available.",
+            app,
+        )
 
 
 if __name__ == "__main__":

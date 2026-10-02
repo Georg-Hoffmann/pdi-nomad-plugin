@@ -85,13 +85,12 @@ button {
 }
 
 .holder-grid {
-    margin-top: 18px;
-    display: grid;
-    grid-template-columns: repeat(
-        auto-fit,
-        minmax(180px, 1fr)
-    );
-    gap: 16px;
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
 }
 
 .holder-position {
@@ -182,10 +181,11 @@ button {
 
 .holder-disc {
     position: relative;
-    width: 520px;
-    height: 520px;
+    width: min(400px, 100%);
+    height: auto;
+    aspect-ratio: 1 / 1;
     max-width: 100%;
-    margin: 24px auto;
+    margin: 16px auto;
     border: 5px solid #737b85;
     border-radius: 50%;
     background:
@@ -201,15 +201,6 @@ button {
         0 2px 6px rgba(0,0,0,0.08);
 }
 
-.holder-disc::after {
-    content: '3 inch holder';
-    position: absolute;
-    left: 50%;
-    bottom: 18px;
-    transform: translateX(-50%);
-    color: #777;
-    font-size: 12px;
-}
 
 .holder-slot {
     position: absolute;
@@ -550,7 +541,7 @@ button {
 .debug-details summary { cursor: pointer; color: #666; font-size: 12px; }
 .holder-image-wrap { margin: 12px auto 20px; text-align: center; }
 .holder-image-wrap img { max-width: 420px; max-height: 260px; width: auto; height: auto; border: 1px solid #d9dde3; border-radius: 8px; background: #fff; }
-.holder-disc-generic { width: min(560px, 92vw); height: min(560px, 92vw); min-width: 340px; min-height: 340px; }
+.holder-disc-generic { width: min(400px, 100%); height: auto; aspect-ratio: 1 / 1; min-width: 0; min-height: 0; }
 .generic-slot { border-radius: 9px; appearance: none; padding: 4px; }
 .generic-slot.selected-position { outline: 4px solid rgba(25,118,210,0.28); outline-offset: 3px; }
 .holder-disc-label { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); color: #68717b; font-size: 12px; font-weight: bold; }
@@ -563,5 +554,162 @@ button {
 @media (max-width: 900px) {
     .layout { grid-template-columns: 1fr; }
     .button-stack, .split-grid { grid-template-columns: 1fr; }
-    .holder-disc-generic { min-width: 300px; min-height: 300px; }
+}
+
+
+.workflow-step-title {
+    margin-top: 14px;
+    margin-bottom: 4px;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.holder-workspace {
+    display: grid;
+    grid-template-columns: minmax(340px, 430px) minmax(320px, 1fr);
+    gap: 24px;
+    align-items: start;
+    margin-top: 10px;
+}
+
+.holder-visual-column,
+.holder-history-column {
+    min-width: 0;
+}
+
+.holder-history-column .treatment-history {
+    margin-top: 8px;
+    min-height: 250px;
+}
+
+.holder-disc-generic .holder-slot {
+    width: 18%;
+    height: auto;
+    aspect-ratio: 1 / 1;
+}
+
+.active-position-controls {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+@media (max-width: 1050px) {
+    .holder-workspace {
+        grid-template-columns: 1fr;
+    }
+
+    .holder-history-column .treatment-history {
+        min-height: 0;
+    }
+}
+
+
+/* Mechanical insert opening inside a holder slot. */
+.holder-slot {
+    overflow: visible;
+}
+
+.holder-slot-name,
+.holder-slot-state {
+    position: relative;
+    z-index: 2;
+}
+
+.holder-insert-window {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    box-sizing: border-box;
+    border: 2px solid #555;
+    border-radius: 4px;
+    background: rgba(90, 90, 90, 0.22);
+    pointer-events: none;
+    z-index: 1;
+}
+
+
+/* FINAL compact holder layout */
+.holder-workspace {
+    display: grid;
+    grid-template-columns: 280px minmax(320px, 1fr);
+    gap: 24px;
+    align-items: start;
+}
+
+.holder-visual-column {
+    width: 280px;
+    min-width: 280px;
+}
+
+.holder-grid {
+    width: 280px;
+    min-width: 280px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.holder-disc,
+.holder-disc-generic {
+    width: 250px !important;
+    height: 250px !important;
+    min-width: 250px !important;
+    min-height: 250px !important;
+    max-width: 250px !important;
+    max-height: 250px !important;
+    aspect-ratio: 1 / 1;
+    margin: 12px auto;
+    box-sizing: border-box;
+}
+
+.holder-disc-generic .holder-slot {
+    width: 58px !important;
+    height: 58px !important;
+    min-width: 58px !important;
+    min-height: 58px !important;
+    box-sizing: border-box;
+}
+
+.right-side-position-panel {
+    margin-top: 8px;
+    margin-bottom: 14px;
+    padding: 14px;
+    border: 1px solid #d9dde3;
+    border-radius: 8px;
+    background: #fff;
+}
+
+.right-side-position-panel:empty {
+    display: none;
+}
+
+.right-side-position-panel > .position-controls {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.right-side-position-panel label {
+    display: block;
+    margin-top: 10px;
+    margin-bottom: 5px;
+    font-weight: 600;
+}
+
+.right-side-position-panel select {
+    width: 100%;
+}
+
+@media (max-width: 900px) {
+    .holder-workspace {
+        grid-template-columns: 1fr;
+    }
+
+    .holder-visual-column,
+    .holder-grid {
+        width: 100%;
+        min-width: 0;
+    }
 }
