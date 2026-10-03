@@ -367,6 +367,49 @@ class BackSideCoatingRecipePDI(BackSideCoatingPDI, Recipe, EntryData):
     )
 
 
+class SampleCutRecipePDI(Recipe, EntryData):
+    """
+    Reusable parameter set for a sample-cut operation.
+
+    The recipe describes the expected parent geometry and the generated child
+    geometry/count. It deliberately contains no concrete parent reference,
+    generated child references, or action trigger; those belong to SampleCutPDI.
+    """
+
+    m_def = Section(
+        label='SampleCutRecipe',
+        categories=[PDICategory],
+    )
+
+    lab_id = Quantity(
+        type=str,
+        description='A unique human readable ID for the sample-cut recipe.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.StringEditQuantity,
+            label='Recipe ID',
+        ),
+    )
+
+    input_geometry = SubSection(
+        section_def=Geometry,
+        description='Expected geometry of each parent substrate.',
+    )
+
+    number_of_samples = Quantity(
+        type=int,
+        description='Number of child samples generated from each parent substrate.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            label='Number of child samples',
+        ),
+    )
+
+    children_geometry = SubSection(
+        section_def=Geometry,
+        description='Geometry assigned to each generated child substrate.',
+    )
+
+
 class SampleCutPDI(ProcessPDI, Process, EntryData):
     """
     An Activity that can be used for cutting a sample in multiple ones.
