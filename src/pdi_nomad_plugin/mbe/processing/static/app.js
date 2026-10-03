@@ -44,6 +44,7 @@ async function loadProcessTypes() {
 
 let substrates = [];
 let recipes = [];
+let treatmentHistoryState = [];
 let processCounter = 0;
 
 function nomadArchiveReference(uploadId, entryId) {
@@ -126,11 +127,150 @@ function substrateStatus(substrate) {
     return '';
 }
 
+function referenceEntryId(reference) {
+    if (!reference) return null;
+    if (typeof reference === 'object' && reference.reference) {
+        return referenceEntryId(reference.reference);
+    }
+    if (typeof reference !== 'string') return null;
+    const match = reference.match(/\/archive\/([^/#]+)/);
+    return match ? match[1] : null;
+}
+
+function cutParentEntryIds() {
+    const parentIds = new Set();
+    substrates.forEach(function(substrate) {
+        const parentEntryId = referenceEntryId(substrate.parentSample);
+        if (parentEntryId) parentIds.add(parentEntryId);
+    });
+    return parentIds;
+}
+
+function substrateHasBeenCut(substrate) {
+    return Boolean(substrate && substrate.entryId && cutParentEntryIds().has(substrate.entryId));
+}
+
+function substrateByEntryId(entryId) {
+    if (!entryId) return null;
+    return substrates.find(function(substrate) { return substrate.entryId === entryId; }) || null;
+}
+
+function substrateLineage(substrate) {
+    const lineage = [];
+    const seen = new Set();
+    let current = substrate;
+    while (current && current.entryId && !seen.has(current.entryId)) {
+        seen.add(current.entryId);
+        lineage.push(current);
+        const parentEntryId = referenceEntryId(current.parentSample);
+        if (!parentEntryId) break;
+        current = substrateByEntryId(parentEntryId);
+    }
+    return lineage;
+}
+
+function treatmentReferencesSubstrate(treatment, substrateEntryId) {
+    if (!treatment || !treatment.data || !substrateEntryId) return false;
+    const samples = treatment.data.samples || [];
+    return samples.some(function(sample) {
+        if (!sample || !sample.reference) return false;
+        if (typeof sample.reference === 'string') {
+            return sample.reference.includes(substrateEntryId);
+        }
+        if (typeof sample.reference === 'object') {
+            return JSON.stringify(sample.reference).includes(substrateEntryId);
+        }
+        return false;
+    });
+}
+
+function treatmentDate(treatment) {
+    const data = treatment.data || {};
+    return data.datetime || data.starting_time || data.start_time || data.ending_time || '';
+}
+
+async function loadTreatmentHistoryEntries() {
+    const treatments = [];
+    for (const [type, definition] of Object.entries(recipeSchemas)) {
+        if (!definition.processSchema) continue;
+        const entries = await queryEntries(
+            definition.processSchema,
+            500,
+            ['entry_id', 'upload_id', 'entry_name', 'data']
+        );
+        entries.forEach(function(entry) {
+            treatments.push({
+                entryId: entry.entry_id,
+                uploadId: entry.upload_id,
+                entryName: entry.entry_name || entry.entry_id,
+                type: type,
+                label: definition.label || type,
+                data: entry.data || {}
+            });
+        });
+    }
+    return treatments;
+}
+
+function treatmentHistoryForSubstrate(substrate) {
+    const rows = [];
+    substrateLineage(substrate).forEach(function(lineageSubstrate, index) {
+        treatmentHistoryState.forEach(function(treatment) {
+            if (treatmentReferencesSubstrate(treatment, lineageSubstrate.entryId)) {
+                rows.push({
+                    treatment: treatment,
+                    substrate: lineageSubstrate,
+                    inherited: index > 0
+                });
+            }
+        });
+    });
+    rows.sort(function(a, b) {
+        return String(treatmentDate(a.treatment)).localeCompare(String(treatmentDate(b.treatment)));
+    });
+    return rows;
+}
+
+function renderHistoryDetails(container, substrate, history) {
+    const lineage = substrateLineage(substrate);
+    if (lineage.length > 1) {
+        const lineageInfo = document.createElement('div');
+        lineageInfo.className = 'history-lineage';
+        lineageInfo.textContent = 'Lineage: ' + lineage.slice().reverse().map(function(item) {
+            return item.labId || item.entryId;
+        }).join(' -> ');
+        container.appendChild(lineageInfo);
+    }
+
+    history.forEach(function(row) {
+        const item = document.createElement('div');
+        item.className = 'history-item';
+        const title = document.createElement('div');
+        title.className = 'history-title';
+        title.textContent = row.treatment.label + ': ' + row.treatment.entryName;
+        item.appendChild(title);
+
+        const details = [];
+        const date = treatmentDate(row.treatment);
+        if (date) details.push(date);
+        if (row.inherited) {
+            details.push('inherited from ' + (row.substrate.labId || row.substrate.entryId));
+        }
+        if (details.length) {
+            const meta = document.createElement('div');
+            meta.className = 'history-meta';
+            meta.textContent = details.join(' · ');
+            item.appendChild(meta);
+        }
+        container.appendChild(item);
+    });
+}
+
 async function loadSubstrates() {
     const entries = await queryEntries('pdi_nomad_plugin.mbe.materials.SubstrateMbe', 1000, [
         'entry_id', 'upload_id', 'entry_name', 'data.lab_id', 'data.material_designation',
         'data.chemical_formula', 'data.crystal_id', 'data.charge_id', 'data.surface_orientation_label',
-        'data.as_delivered', 'data.processed', 'data.grown'
+        'data.parent_sample', 'data.as_delivered', 'data.processed', 'data.grown'
     ]);
     return entries.map(function(entry) {
         const data = entry.data || {};
@@ -143,6 +283,7 @@ async function loadSubstrates() {
             crystalId: data.crystal_id || '',
             chargeId: data.charge_id || '',
             orientation: data.surface_orientation_label || '',
+            parentSample: data.parent_sample || null,
             asDelivered: Boolean(data.as_delivered),
             processed: Boolean(data.processed),
             grown: Boolean(data.grown),
@@ -277,6 +418,7 @@ function filteredSubstrates() {
     const orientation = document.getElementById('orientationFilter').value;
     const status = document.getElementById('statusFilter').value;
     return substrates.filter(function(substrate) {
+        if (substrateHasBeenCut(substrate)) return false;
         const searchable = [substrate.labId, substrate.material, substrate.formula, substrate.crystalId, substrate.chargeId, substrate.orientation]
             .filter(Boolean).join(' ').toLowerCase();
         return (!search || searchable.includes(search)) &&
@@ -290,31 +432,66 @@ function filteredSubstrates() {
 function renderSubstrates() {
     const container = document.getElementById('substrateResults');
     const visible = filteredSubstrates();
+    const cutCount = substrates.filter(substrateHasBeenCut).length;
     container.innerHTML = '';
+
     visible.forEach(function(substrate) {
+        const history = treatmentHistoryForSubstrate(substrate);
         const row = document.createElement('div');
         row.className = 'result-grid result-row';
+
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.checked = substrate.selected;
-        checkbox.addEventListener('change', function() { substrate.selected = checkbox.checked; updateSaveSummary(); });
+        checkbox.addEventListener('change', function() {
+            substrate.selected = checkbox.checked;
+            updateSaveSummary();
+        });
         row.appendChild(checkbox);
+
         [
             substrate.labId,
             substrate.material || '-',
             substrate.crystalId || substrate.chargeId || '-',
-            substrate.orientation || '-',
-            substrateStatus(substrate) || '-'
+            substrate.orientation || '-'
         ].forEach(function(value) {
             const cell = document.createElement('div');
             cell.textContent = value;
             row.appendChild(cell);
         });
+
+        const statusCell = document.createElement('div');
+        statusCell.className = 'result-status-cell';
+        const statusText = document.createElement('span');
+        statusText.textContent = substrateStatus(substrate) || '-';
+        statusCell.appendChild(statusText);
+
+        if (history.length) {
+            const historyButton = document.createElement('button');
+            historyButton.type = 'button';
+            historyButton.className = 'history-toggle';
+            historyButton.textContent = history.length + ' process' + (history.length === 1 ? '' : 'es') + (substrate.historyOpen ? ' ▴' : ' ▾');
+            historyButton.addEventListener('click', function() {
+                substrate.historyOpen = !substrate.historyOpen;
+                renderSubstrates();
+            });
+            statusCell.appendChild(historyButton);
+        }
+        row.appendChild(statusCell);
         container.appendChild(row);
+
+        if (substrate.historyOpen && history.length) {
+            const historyRow = document.createElement('div');
+            historyRow.className = 'history-row';
+            renderHistoryDetails(historyRow, substrate, history);
+            container.appendChild(historyRow);
+        }
     });
+
     document.getElementById('substrateStatus').textContent =
         visible.length + ' matching substrate' + (visible.length === 1 ? '' : 's') +
-        '; ' + substrates.filter(function(item) { return item.selected; }).length + ' selected.';
+        '; ' + substrates.filter(function(item) { return item.selected && !substrateHasBeenCut(item); }).length + ' selected' +
+        (cutCount ? '; ' + cutCount + ' cut parent' + (cutCount === 1 ? '' : 's') + ' hidden from physical processing.' : '.');
 }
 
 function updateRecipeSelect(card) {
@@ -506,8 +683,13 @@ async function saveProcesses() {
     const button = document.getElementById('saveProcessesButton');
     const status = document.getElementById('processStatus');
     const uploadId = document.getElementById('targetUpload').value;
-    const selected = substrates.filter(function(item) { return item.selected; });
+    const selected = substrates.filter(function(item) { return item.selected && !substrateHasBeenCut(item); });
+    const invalidSelected = substrates.filter(function(item) { return item.selected && substrateHasBeenCut(item); });
     const definitions = processDefinitions();
+    if (invalidSelected.length) {
+        status.textContent = 'Cut parent substrates are no longer physically available and cannot be processed.';
+        return;
+    }
     if (!uploadId) { status.textContent = 'Select a target upload first.'; return; }
     if (!selected.length) { status.textContent = 'Select at least one substrate.'; return; }
     if (!definitions.length) { status.textContent = 'Add at least one process.'; return; }
@@ -525,6 +707,12 @@ async function saveProcesses() {
             saved += 1;
         }
         status.textContent = saved + ' process entr' + (saved === 1 ? 'y' : 'ies') + ' saved. NOMAD processing was triggered.';
+        try {
+            treatmentHistoryState = await loadTreatmentHistoryEntries();
+            renderSubstrates();
+        } catch (historyError) {
+            console.warn('Process history refresh failed:', historyError);
+        }
     } catch (error) {
         status.textContent = (saved ? saved + ' process(es) saved; next process failed: ' : 'Error: ') + error.message;
     } finally {
@@ -536,9 +724,10 @@ function applyIncomingSelection() {
     const params = new URLSearchParams(window.location.search);
     const entryId = params.get('substrate_entry_id');
     const returnUrl = params.get('return_url');
+    const returnLabel = params.get('return_label');
     if (entryId) {
         const selected = substrates.find(function(item) { return item.entryId === entryId; });
-        if (selected) {
+        if (selected && !substrateHasBeenCut(selected)) {
             selected.selected = true;
             document.getElementById('substrateSearch').value = selected.labId;
         }
@@ -548,6 +737,7 @@ function applyIncomingSelection() {
             const target = new URL(returnUrl, window.location.origin);
             if (target.origin === window.location.origin) {
                 const button = document.getElementById('returnButton');
+                button.textContent = returnLabel || 'Back';
                 button.style.display = 'inline-block';
                 button.addEventListener('click', function() { window.location.href = target.href; });
             }
@@ -561,9 +751,10 @@ async function initialise() {
 
         recipeSchemas = await loadProcessTypes();
 
-        [substrates, recipes] = await Promise.all([
+        [substrates, recipes, treatmentHistoryState] = await Promise.all([
             loadSubstrates(),
-            loadRecipes()
+            loadRecipes(),
+            loadTreatmentHistoryEntries()
         ]);
 
         await loadUploads();
