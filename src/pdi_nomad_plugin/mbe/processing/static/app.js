@@ -169,18 +169,27 @@ function substrateLineage(substrate) {
     return lineage;
 }
 
+function referenceContainsEntryId(reference, substrateEntryId) {
+    if (!reference || !substrateEntryId) return false;
+    if (typeof reference === 'string') {
+        return reference.includes(substrateEntryId);
+    }
+    if (typeof reference === 'object') {
+        return JSON.stringify(reference).includes(substrateEntryId);
+    }
+    return false;
+}
+
 function treatmentReferencesSubstrate(treatment, substrateEntryId) {
     if (!treatment || !treatment.data || !substrateEntryId) return false;
+
+    if (referenceContainsEntryId(treatment.data.parent_sample, substrateEntryId)) {
+        return true;
+    }
+
     const samples = treatment.data.samples || [];
     return samples.some(function(sample) {
-        if (!sample || !sample.reference) return false;
-        if (typeof sample.reference === 'string') {
-            return sample.reference.includes(substrateEntryId);
-        }
-        if (typeof sample.reference === 'object') {
-            return JSON.stringify(sample.reference).includes(substrateEntryId);
-        }
-        return false;
+        return sample && referenceContainsEntryId(sample.reference, substrateEntryId);
     });
 }
 
@@ -270,7 +279,7 @@ async function loadSubstrates() {
     const entries = await queryEntries('pdi_nomad_plugin.mbe.materials.SubstrateMbe', 1000, [
         'entry_id', 'upload_id', 'entry_name', 'data.lab_id', 'data.material_designation',
         'data.chemical_formula', 'data.crystal_id', 'data.charge_id', 'data.surface_orientation_label',
-        'data.parent_sample', 'data.as_delivered', 'data.processed', 'data.grown'
+        'data.geometry', 'data.parent_sample', 'data.as_delivered', 'data.processed', 'data.grown'
     ]);
     return entries.map(function(entry) {
         const data = entry.data || {};
@@ -283,6 +292,7 @@ async function loadSubstrates() {
             crystalId: data.crystal_id || '',
             chargeId: data.charge_id || '',
             orientation: data.surface_orientation_label || '',
+            geometry: data.geometry || null,
             parentSample: data.parent_sample || null,
             asDelivered: Boolean(data.as_delivered),
             processed: Boolean(data.processed),
@@ -295,14 +305,32 @@ async function loadSubstrates() {
 async function loadRecipes() {
     const result = [];
     for (const [type, definition] of Object.entries(recipeSchemas)) {
-        const entries = await queryEntries(definition.schema, 200, ['entry_id', 'upload_id', 'entry_name', 'data.name', 'data.lab_id']);
+        const include = [
+            'entry_id',
+            'upload_id',
+            'entry_name',
+            'data.name',
+            'data.lab_id'
+        ];
+        if (definition.kind === 'sample_cut') {
+            include.push(
+                'data.input_geometry',
+                'data.number_of_samples',
+                'data.children_geometry'
+            );
+        }
+
+        const entries = await queryEntries(definition.schema, 200, include);
         entries.forEach(function(entry) {
             const data = entry.data || {};
             result.push({
                 type: type,
                 entryId: entry.entry_id,
                 uploadId: entry.upload_id,
-                name: data.lab_id || data.name || entry.entry_name || entry.entry_id
+                name: data.lab_id || data.name || entry.entry_name || entry.entry_id,
+                inputGeometry: data.input_geometry || null,
+                numberOfSamples: data.number_of_samples || null,
+                childrenGeometry: data.children_geometry || null
             });
         });
     }
@@ -494,6 +522,136 @@ function renderSubstrates() {
         (cutCount ? '; ' + cutCount + ' cut parent' + (cutCount === 1 ? '' : 's') + ' hidden from physical processing.' : '.');
 }
 
+
+function geometryNumber(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (
+        value &&
+        typeof value === 'object' &&
+        typeof value.magnitude === 'number' &&
+        Number.isFinite(value.magnitude)
+    ) {
+        return value.magnitude;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function geometryXY(geometry) {
+    if (!geometry || typeof geometry !== 'object') return null;
+
+    const width = geometryNumber(geometry.width);
+    let length = geometryNumber(geometry.length);
+
+    if (!Number.isFinite(width)) return null;
+    if (!Number.isFinite(length)) length = width;
+
+    return {width: width, length: length};
+}
+
+function geometryMatches(first, second) {
+    const a = geometryXY(first);
+    const b = geometryXY(second);
+    if (!a || !b) return false;
+
+    const tolerance = 0.00005;
+    const direct =
+        Math.abs(a.width - b.width) <= tolerance &&
+        Math.abs(a.length - b.length) <= tolerance;
+    const rotated =
+        Math.abs(a.width - b.length) <= tolerance &&
+        Math.abs(a.length - b.width) <= tolerance;
+
+    return direct || rotated;
+}
+
+function geometryDisplay(geometry) {
+    const value = geometryXY(geometry);
+    if (!value) return 'Not specified';
+
+    function mm(number) {
+        return (number * 1000).toLocaleString(undefined, {
+            maximumFractionDigits: 3
+        });
+    }
+
+    return mm(value.width) + ' × ' + mm(value.length) + ' mm';
+}
+
+function isSampleCutType(type) {
+    return Boolean(
+        recipeSchemas[type] &&
+        recipeSchemas[type].kind === 'sample_cut'
+    );
+}
+
+function updateProcessCardMode(card) {
+    const type = card.querySelector('.process-type').value;
+    const isSampleCut = isSampleCutType(type);
+    const recipeLabel = card.querySelector('.recipe-label');
+    const details = card.querySelector('.sample-cut-details');
+
+    recipeLabel.textContent = isSampleCut ? 'Cut recipe' : 'Recipe';
+    details.style.display = isSampleCut ? 'block' : 'none';
+
+    updateSampleCutDetails(card);
+}
+
+function updateSampleCutDetails(card) {
+    const details = card.querySelector('.sample-cut-details');
+    if (!details || details.style.display === 'none') return;
+
+    const recipeSelect = card.querySelector('.recipe-select');
+    const recipe = recipes.find(function(item) {
+        return item.entryId === recipeSelect.value;
+    });
+
+    const parent = card.querySelector('.sample-cut-parent-geometry');
+    const output = card.querySelector('.sample-cut-output');
+
+    if (!recipe) {
+        parent.textContent = 'Select a cut recipe';
+        output.textContent = 'Select a cut recipe';
+        return;
+    }
+
+    parent.textContent = geometryDisplay(recipe.inputGeometry);
+    output.textContent =
+        String(recipe.numberOfSamples || '?') +
+        ' × ' +
+        geometryDisplay(recipe.childrenGeometry);
+}
+
+function validateSampleCutRecipe(recipe, selectedSubstrates, processIndex) {
+    if (!recipe) {
+        throw new Error(
+            'Process ' + (processIndex + 1) + ': select a cut recipe.'
+        );
+    }
+    if (!recipe.numberOfSamples || !recipe.childrenGeometry) {
+        throw new Error(
+            'Process ' + (processIndex + 1) +
+            ': selected cut recipe is missing child count or child geometry.'
+        );
+    }
+
+    if (recipe.inputGeometry) {
+        const incompatible = selectedSubstrates.filter(function(substrate) {
+            return !substrate.geometry ||
+                !geometryMatches(substrate.geometry, recipe.inputGeometry);
+        });
+        if (incompatible.length) {
+            throw new Error(
+                'Process ' + (processIndex + 1) +
+                ': substrate geometry does not match the selected cut recipe: ' +
+                incompatible.map(function(item) { return item.labId; }).join(', ')
+            );
+        }
+    }
+}
+
 function updateRecipeSelect(card) {
     const type = card.querySelector('.process-type').value;
     const select = card.querySelector('.recipe-select');
@@ -507,6 +665,7 @@ function updateRecipeSelect(card) {
         select.appendChild(option);
     });
     select.disabled = matching.length === 0;
+    updateProcessCardMode(card);
 }
 
 function collapseOthers(active) {
@@ -544,7 +703,22 @@ function addProcess() {
                 <div><label>Process type</label><select class="process-type">${options}</select></div>
                 <div><label>Date / Time</label><input class="process-datetime" type="datetime-local" value="${localDateTimeValue()}"></div>
             </div>
-            <label>Recipe</label><select class="recipe-select"></select>
+            <label class="recipe-label">Recipe</label><select class="recipe-select"></select>
+            <div class="sample-cut-details" style="display:none;">
+                <div class="sample-cut-detail-grid">
+                    <div>
+                        <label>Expected parent geometry</label>
+                        <div class="sample-cut-readonly sample-cut-parent-geometry">Select a cut recipe</div>
+                    </div>
+                    <div>
+                        <label>Output per parent</label>
+                        <div class="sample-cut-readonly sample-cut-output">Select a cut recipe</div>
+                    </div>
+                </div>
+                <div class="sample-cut-note">
+                    Cut parameters are fixed by the selected SampleCutRecipePDI.
+                </div>
+            </div>
             <label>Comments</label><textarea class="process-comments" placeholder="Optional"></textarea>
             <div class="process-footer"><button class="remove-button" type="button">Remove process</button><button class="collapse-button" type="button">Done / collapse</button></div>
         </div>`;
@@ -558,9 +732,13 @@ function addProcess() {
     typeSelect.addEventListener('change', function() {
         meta.textContent = recipeSchemas[typeSelect.value].label;
         updateRecipeSelect(card);
+        updateProcessCardMode(card);
         updateSaveSummary();
     });
-    card.querySelector('.recipe-select').addEventListener('change', updateSaveSummary);
+    card.querySelector('.recipe-select').addEventListener('change', function() {
+        updateSampleCutDetails(card);
+        updateSaveSummary();
+    });
     card.querySelector('.collapse-button').addEventListener('click', function() { card.classList.remove('open'); });
     card.querySelector('.remove-button').addEventListener('click', function() { card.remove(); renumberProcesses(); });
     updateRecipeSelect(card);
@@ -574,6 +752,7 @@ function processDefinitions() {
         const recipe = recipes.find(function(item) { return item.entryId === recipeSelect.value; });
         return {
             type: type,
+            kind: recipeSchemas[type] ? recipeSchemas[type].kind || 'process' : 'process',
             recipe: recipe || null,
             datetime: card.querySelector('.process-datetime').value,
             comments: card.querySelector('.process-comments').value.trim()
@@ -593,6 +772,12 @@ function safePart(value) {
 }
 
 function processArchiveData(definition, selectedSubstrates, index) {
+    if (definition.kind === 'sample_cut') {
+        throw new Error(
+            'Process ' + (index + 1) +
+            ': sample cut must be saved per parent substrate.'
+        );
+    }
     if (!definition.recipe) throw new Error('Process ' + (index + 1) + ': select a recipe.');
     if (!definition.datetime) throw new Error('Process ' + (index + 1) + ': enter date / time.');
     const schema = recipeSchemas[definition.type];
@@ -621,6 +806,49 @@ function processArchiveData(definition, selectedSubstrates, index) {
         })
     };
     if (definition.comments) data.description = definition.comments;
+    return data;
+}
+
+
+function sampleCutArchiveData(definition, substrate, index) {
+    validateSampleCutRecipe(definition.recipe, [substrate], index);
+
+    if (!definition.datetime) {
+        throw new Error(
+            'Process ' + (index + 1) + ': enter date / time.'
+        );
+    }
+    if (!substrate.entryId || !substrate.uploadId) {
+        throw new Error(
+            'Process ' + (index + 1) +
+            ': substrate ' + (substrate.labId || '(unknown)') +
+            ' has no valid NOMAD entry/upload reference.'
+        );
+    }
+
+    const schema = recipeSchemas[definition.type];
+    if (!schema || schema.kind !== 'sample_cut') {
+        throw new Error('Unsupported sample cut type: ' + definition.type);
+    }
+
+    const data = {
+        m_def: schema.processSchema,
+        name: schema.label + ' - ' + substrate.labId,
+        datetime: new Date(definition.datetime).toISOString(),
+        number_of_samples: definition.recipe.numberOfSamples,
+        children_geometry: definition.recipe.childrenGeometry,
+        parent_sample: {
+            name: substrate.labId,
+            reference: nomadArchiveReference(
+                substrate.uploadId,
+                substrate.entryId
+            )
+        },
+        trigger_cut_sample: true
+    };
+
+    if (definition.comments) data.description = definition.comments;
+
     return data;
 }
 
@@ -699,19 +927,106 @@ async function saveProcesses() {
     try {
         for (let i = 0; i < definitions.length; i++) {
             const definition = definitions[i];
-            const data = processArchiveData(definition, selected, i);
             const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '');
-            const filename = 'processing_' + safePart(definition.type) + '_' + stamp + '_' + String(i + 1) + '.archive.json';
-            status.textContent = 'Saving process ' + (i + 1) + ' of ' + definitions.length + '...';
-            await uploadArchive(uploadId, filename, data);
-            saved += 1;
+
+            if (definition.kind === 'sample_cut') {
+                validateSampleCutRecipe(definition.recipe, selected, i);
+
+                for (let parentIndex = 0; parentIndex < selected.length; parentIndex++) {
+                    const substrate = selected[parentIndex];
+                    const data = sampleCutArchiveData(
+                        definition,
+                        substrate,
+                        i
+                    );
+                    const filename =
+                        'processing_sample_cut_' +
+                        safePart(substrate.labId) +
+                        '_' +
+                        stamp +
+                        '_' +
+                        String(i + 1) +
+                        '_' +
+                        String(parentIndex + 1) +
+                        '.archive.json';
+
+                    status.textContent =
+                        'Cutting parent ' +
+                        String(parentIndex + 1) +
+                        ' of ' +
+                        selected.length +
+                        ' for process ' +
+                        String(i + 1) +
+                        '...';
+
+                    await uploadArchive(uploadId, filename, data);
+                    saved += 1;
+                }
+            } else {
+                const data = processArchiveData(definition, selected, i);
+                const filename =
+                    'processing_' +
+                    safePart(definition.type) +
+                    '_' +
+                    stamp +
+                    '_' +
+                    String(i + 1) +
+                    '.archive.json';
+
+                status.textContent =
+                    'Saving process ' +
+                    String(i + 1) +
+                    ' of ' +
+                    definitions.length +
+                    '...';
+
+                await uploadArchive(uploadId, filename, data);
+                saved += 1;
+            }
         }
-        status.textContent = saved + ' process entr' + (saved === 1 ? 'y' : 'ies') + ' saved. NOMAD processing was triggered.';
+
+        status.textContent =
+            saved +
+            ' process/action entr' +
+            (saved === 1 ? 'y' : 'ies') +
+            ' saved. NOMAD processing was triggered.';
+
         try {
-            treatmentHistoryState = await loadTreatmentHistoryEntries();
+            const selectedEntryIds = new Set(
+                substrates
+                    .filter(function(item) { return item.selected; })
+                    .map(function(item) { return item.entryId; })
+            );
+
+            [substrates, treatmentHistoryState] = await Promise.all([
+                loadSubstrates(),
+                loadTreatmentHistoryEntries()
+            ]);
+
+            substrates.forEach(function(item) {
+                item.selected =
+                    selectedEntryIds.has(item.entryId) &&
+                    !substrateHasBeenCut(item);
+            });
+
+            populateFilter(
+                'materialFilter',
+                substrates.map(function(s) { return s.material; })
+            );
+            populateFilter(
+                'batchFilter',
+                substrates.flatMap(function(s) {
+                    return [s.crystalId, s.chargeId];
+                })
+            );
+            populateFilter(
+                'orientationFilter',
+                substrates.map(function(s) { return s.orientation; })
+            );
             renderSubstrates();
+            updateSaveSummary();
         } catch (historyError) {
-            console.warn('Process history refresh failed:', historyError);
+            console.warn('Process/substrate refresh failed:', historyError);
         }
     } catch (error) {
         status.textContent = (saved ? saved + ' process(es) saved; next process failed: ' : 'Error: ') + error.message;

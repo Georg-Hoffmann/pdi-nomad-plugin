@@ -32,6 +32,12 @@ PROCESS_TYPES = {
         'schema': 'pdi_nomad_plugin.general.schema.BackSideCoatingRecipePDI',
         'processSchema': 'pdi_nomad_plugin.general.schema.BackSideCoatingPDI',
     },
+    'sample_cut': {
+        'label': 'Sample Cut',
+        'schema': 'pdi_nomad_plugin.general.schema.SampleCutRecipePDI',
+        'processSchema': 'pdi_nomad_plugin.general.schema.SampleCutPDI',
+        'kind': 'sample_cut',
+    },
 }
 
 
