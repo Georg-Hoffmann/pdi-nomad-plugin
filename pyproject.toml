@@ -135,6 +135,7 @@ mbe_app = "pdi_nomad_plugin.mbe.mbe_app:substrateapp"
 substrate_intake = "pdi_nomad_plugin.mbe.substrate_intake:substrate_intake"
 new_mbe_experiment = "pdi_nomad_plugin.mbe.new_mbe_experiment:new_mbe_experiment"
 processing = "pdi_nomad_plugin.mbe.processing:processing"
+lab_library = "pdi_nomad_plugin.mbe.lab_library:lab_library"
 
 
 [tool.setuptools.package-data]
@@ -143,6 +144,10 @@ processing = "pdi_nomad_plugin.mbe.processing:processing"
     "static/*",
 ]
 "pdi_nomad_plugin.mbe.processing" = [
+    "templates/*.html",
+    "static/*",
+]
+"pdi_nomad_plugin.mbe.lab_library" = [
     "templates/*.html",
     "static/*",
 ]
