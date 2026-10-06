@@ -279,9 +279,12 @@ async function loadSubstrates() {
     const entries = await queryEntries('pdi_nomad_plugin.mbe.materials.SubstrateMbe', 1000, [
         'entry_id', 'upload_id', 'entry_name', 'data.lab_id', 'data.material_designation',
         'data.chemical_formula', 'data.crystal_id', 'data.charge_id', 'data.surface_orientation_label',
-        'data.geometry', 'data.parent_sample', 'data.as_delivered', 'data.processed', 'data.grown'
+        'data.m_def', 'data.geometry', 'data.parent_sample', 'data.as_delivered', 'data.processed', 'data.grown'
     ]);
-    return entries.map(function(entry) {
+    return entries.filter(function(entry) {
+        const data = entry.data || {};
+        return data.m_def === 'pdi_nomad_plugin.mbe.materials.SubstrateMbe';
+    }).map(function(entry) {
         const data = entry.data || {};
         return {
             entryId: entry.entry_id,
@@ -299,6 +302,12 @@ async function loadSubstrates() {
             grown: Boolean(data.grown),
             selected: false
         };
+    }).sort(function(a, b) {
+        return String(a.labId).localeCompare(
+            String(b.labId),
+            undefined,
+            {numeric: true, sensitivity: 'base'}
+        );
     });
 }
 

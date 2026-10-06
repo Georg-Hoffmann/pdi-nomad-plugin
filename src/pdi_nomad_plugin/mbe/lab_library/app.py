@@ -1,3 +1,5 @@
+from copy import deepcopy
+import importlib
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -78,9 +80,54 @@ LIBRARY_TYPES = {
 }
 
 
+def _recipe_scalar_fields(schema_path):
+    module_name, class_name = schema_path.rsplit('.', 1)
+    cls = getattr(importlib.import_module(module_name), class_name)
+
+    skip = {
+        'm_def',
+        'name',
+        'lab_id',
+        'datetime',
+        'samples',
+        'recipe',
+        'starting_time',
+        'ending_time',
+        'end_time',
+        'location',
+        'tags',
+    }
+
+    fields = []
+
+    for name, quantity in cls.m_def.all_quantities.items():
+        if name in skip:
+            continue
+
+        # Only scalar quantities here; arrays such as tags are excluded.
+        if getattr(quantity, 'shape', None):
+            continue
+
+        quantity_type = repr(getattr(quantity, 'type', None))
+
+        if 'Reference object' in quantity_type:
+            continue
+        if 'Datetime' in quantity_type:
+            continue
+
+        fields.append(name)
+
+    return sorted(fields)
+
+
 @app.get('/library-types')
 async def library_types():
-    return LIBRARY_TYPES
+    result = deepcopy(LIBRARY_TYPES)
+
+    for definition in result['processing_recipe']['schemas'].values():
+        definition['fields'] = _recipe_scalar_fields(definition['schema'])
+
+    return result
 
 
 @app.get('/', response_class=HTMLResponse)

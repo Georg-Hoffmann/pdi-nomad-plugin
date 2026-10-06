@@ -681,18 +681,11 @@ function fieldValuesFromCatalog(field) {
 }
 
 function dynamicScalarFields() {
-    const skip = new Set([
-        'm_def', 'name', 'lab_id', 'datetime', 'samples', 'recipe',
-        'starting_time', 'ending_time', 'location'
-    ]);
-    const fields = new Set();
-    (allProcessingCatalogs[currentSubtype] || []).forEach(function(item) {
-        Object.entries(item.data || {}).forEach(function([key, value]) {
-            if (skip.has(key)) return;
-            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') fields.add(key);
-        });
-    });
-    return Array.from(fields).sort();
+    const definition = currentDefinition() || {};
+    if (Array.isArray(definition.fields)) {
+        return definition.fields;
+    }
+    return [];
 }
 
 function friendlyFieldLabel(field) {
