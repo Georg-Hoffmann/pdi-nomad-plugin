@@ -221,6 +221,27 @@ async function loadTreatmentHistoryEntries() {
     return treatments;
 }
 
+function formatProcessingDateTime(value) {
+    if (!value) return '';
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return String(value);
+    }
+
+    return date.toLocaleString(undefined, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    });
+}
+
+
 function treatmentHistoryForSubstrate(substrate) {
     const rows = [];
     substrateLineage(substrate).forEach(function(lineageSubstrate, index) {
@@ -261,7 +282,7 @@ function renderHistoryDetails(container, substrate, history) {
 
         const details = [];
         const date = treatmentDate(row.treatment);
-        if (date) details.push(date);
+        if (date) details.push(formatProcessingDateTime(date));
         if (row.inherited) {
             details.push('inherited from ' + (row.substrate.labId || row.substrate.entryId));
         }
@@ -694,7 +715,7 @@ function renumberProcesses() {
 function localDateTimeValue() {
     const now = new Date();
     const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-    return local.toISOString().slice(0, 16);
+    return local.toISOString().slice(0, 19);
 }
 
 function addProcess() {
@@ -710,7 +731,7 @@ function addProcess() {
         <div class="process-body">
             <div class="process-fields">
                 <div><label>Process type</label><select class="process-type">${options}</select></div>
-                <div><label>Date / Time</label><input class="process-datetime" type="datetime-local" value="${localDateTimeValue()}"></div>
+                <div><label>Date / Time</label><input class="process-datetime" type="datetime-local" step="1" value="${localDateTimeValue()}"></div>
             </div>
             <label class="recipe-label">Recipe</label><select class="recipe-select"></select>
             <div class="sample-cut-details" style="display:none;">
@@ -999,6 +1020,14 @@ async function saveProcesses() {
             ' process/action entr' +
             (saved === 1 ? 'y' : 'ies') +
             ' saved. NOMAD processing was triggered.';
+
+        // Start with a clean Processing form after a successful upload.
+        // The reload also fetches the newly created processing history.
+        setTimeout(function() {
+            window.location.reload();
+        }, 500);
+
+        return;
 
         try {
             const selectedEntryIds = new Set(

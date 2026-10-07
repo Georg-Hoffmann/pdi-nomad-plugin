@@ -63,55 +63,145 @@ async function loadTreatmentHistoryEntries() {
         {
             type: 'cleaning',
             label: 'Cleaning',
-            schema:
-                'pdi_nomad_plugin.general.schema.CleaningPDI'
+            processSchema:
+                'pdi_nomad_plugin.general.schema.CleaningPDI',
+            recipeSchema:
+                'pdi_nomad_plugin.general.schema.CleaningRecipePDI'
         },
         {
             type: 'annealing',
             label: 'Annealing',
-            schema:
-                'pdi_nomad_plugin.general.schema.AnnealingPDI'
-        },
-        {
-            type: 'etching',
-            label: 'Etching',
-            schema:
-                'pdi_nomad_plugin.general.schema.EtchingPDI'
+            processSchema:
+                'pdi_nomad_plugin.general.schema.AnnealingPDI',
+            recipeSchema:
+                'pdi_nomad_plugin.general.schema.AnnealingRecipePDI'
         },
         {
             type: 'back_side_coating',
             label: 'Back-side coating',
-            schema:
-                'pdi_nomad_plugin.general.schema.BackSideCoatingPDI'
+            processSchema:
+                'pdi_nomad_plugin.general.schema.BackSideCoatingPDI',
+            recipeSchema:
+                'pdi_nomad_plugin.general.schema.BackSideCoatingRecipePDI'
         }
     ];
 
     const treatments = [];
 
-    // FIX: was POSTing to /entries/query with required.include containing
-    // the bare word 'data', which /entries/query rejects with a 422 (it
-    // only serves indexed doc quantities, not archive content). Reuses the
-    // already-fixed queryEntriesBySchema(), which talks to
-    // /entries/archive/query instead and returns the same entry shape.
     for (const treatmentSchema of treatmentSchemas) {
-        const entries = await queryEntriesBySchema(
-            treatmentSchema.schema,
-            500,
-            ['entry_id', 'upload_id', 'entry_name', 'data']
+
+        /*
+         * Load the recipes of this process type first.
+         * The history should show the RECIPE name, not the
+         * generic process-entry name such as
+         * "Annealing - 4 substrates".
+         */
+        const recipeEntries =
+            await queryEntriesBySchema(
+                treatmentSchema.recipeSchema,
+                500,
+                [
+                    'entry_id',
+                    'upload_id',
+                    'entry_name',
+                    'data.name',
+                    'data.lab_id'
+                ]
+            );
+
+        const recipeNames =
+            new Map();
+
+        recipeEntries.forEach(
+            function(recipe) {
+                const data =
+                    recipe.data || {};
+
+                recipeNames.set(
+                    recipe.entry_id,
+                    data.name ||
+                    data.lab_id ||
+                    recipe.entry_name ||
+                    recipe.entry_id
+                );
+            }
         );
 
-        entries.forEach(function(entry) {
-            treatments.push({
-                entryId: entry.entry_id,
-                uploadId: entry.upload_id,
-                entryName: entry.entry_name || entry.entry_id,
-                type: treatmentSchema.type,
-                label: treatmentSchema.label,
-                data: entry.data || {}
-            });
-        });
-    }
+        const entries =
+            await queryEntriesBySchema(
+                treatmentSchema.processSchema,
+                500,
+                [
+                    'entry_id',
+                    'upload_id',
+                    'entry_name',
+                    'data'
+                ]
+            );
 
+        entries.forEach(
+            function(entry) {
+                const data =
+                    entry.data || {};
+
+                const recipeReference =
+                    referenceValue(
+                        data.recipe
+                    );
+
+                const recipeEntryId =
+                    entryIdFromReference(
+                        recipeReference
+                    );
+
+                let recipeName =
+                    recipeEntryId
+                        ? recipeNames.get(
+                            recipeEntryId
+                        )
+                        : '';
+
+                /*
+                 * Some NOMAD references may already contain
+                 * resolved display information.
+                 */
+                if (
+                    !recipeName &&
+                    data.recipe &&
+                    typeof data.recipe === 'object'
+                ) {
+                    recipeName =
+                        data.recipe.name ||
+                        data.recipe.lab_id ||
+                        '';
+                }
+
+                treatments.push({
+                    entryId:
+                        entry.entry_id,
+
+                    uploadId:
+                        entry.upload_id,
+
+                    entryName:
+                        entry.entry_name ||
+                        entry.entry_id,
+
+                    type:
+                        treatmentSchema.type,
+
+                    label:
+                        treatmentSchema.label,
+
+                    recipeName:
+                        recipeName,
+
+                    data:
+                        data
+                });
+            }
+        );
+    }
 
     console.log(
         'Treatment history entries:',
@@ -120,7 +210,6 @@ async function loadTreatmentHistoryEntries() {
 
     return treatments;
 }
-
 
 function treatmentReferencesSubstrate(
     treatment,
@@ -1713,6 +1802,91 @@ async function initialiseTreatmentRecipes() {
 }
 
 
+const TARGET_UPLOAD_STORAGE_KEY =
+    'new_mbe_target_upload';
+
+
+function installTargetUploadPersistence() {
+    const select =
+        document.getElementById(
+            'targetUpload'
+        );
+
+    if (
+        !select ||
+        select.dataset.persistenceInstalled === '1'
+    ) {
+        return;
+    }
+
+    select.dataset.persistenceInstalled = '1';
+
+    select.addEventListener(
+        'change',
+        function() {
+            if (select.value) {
+                sessionStorage.setItem(
+                    TARGET_UPLOAD_STORAGE_KEY,
+                    select.value
+                );
+            } else {
+                sessionStorage.removeItem(
+                    TARGET_UPLOAD_STORAGE_KEY
+                );
+            }
+        }
+    );
+}
+
+
+function restoreTargetUploadSelection() {
+    const select =
+        document.getElementById(
+            'targetUpload'
+        );
+
+    if (!select) {
+        return;
+    }
+
+    const saved =
+        sessionStorage.getItem(
+            TARGET_UPLOAD_STORAGE_KEY
+        );
+
+    if (
+        saved &&
+        Array.from(select.options).some(
+            function(option) {
+                return option.value === saved;
+            }
+        )
+    ) {
+        select.value = saved;
+    }
+}
+
+
+function updateEmptyHolderButton(workflowStatus) {
+    const button =
+        document.getElementById(
+            'emptyHolderButton'
+        );
+
+    if (!button) {
+        return;
+    }
+
+    if (workflowStatus === 'grown') {
+        button.textContent =
+            'Take off samples';
+    } else {
+        button.textContent =
+            'Empty filled holder';
+    }
+}
+
+
 async function loadUploads() {
 
     const select =
@@ -2152,7 +2326,10 @@ function renderTreatmentHistory() {
             title.textContent =
                 treatment.label +
                 ': ' +
-                treatment.entryName;
+                (
+                    treatment.recipeName ||
+                    treatment.entryName
+                );
 
             item.appendChild(
                 title
@@ -2789,60 +2966,333 @@ function isDiscardedLoadout(data) {
 }
 
 
-async function loadHolderCatalogV2() {
-    const [emptyRaw, filledRaw, experiments] = await Promise.all([
-        queryEntriesBySchema(
-            'pdi_nomad_plugin.mbe.instrument.SubstrateHolderPDI',
-            500,
-            ['entry_id', 'upload_id', 'entry_name', 'data']
-        ),
-        queryEntriesBySchema(
-            'pdi_nomad_plugin.mbe.instrument.FilledSubstrateHolderPDI',
-            500,
-            ['entry_id', 'upload_id', 'entry_name', 'data', 'mainfile', 'published']
-        ),
-        queryExperimentHolderReferences()
-    ]);
+const HOLDER_WORKFLOW_STATES = [
+    'empty',
+    'ungrown',
+    'grown'
+];
 
-    const empty = emptyRaw.filter(function(entry) {
-        const mDef = String((entry.data || {}).m_def || '');
-        return !mDef.includes('FilledSubstrateHolderPDI');
-    });
-    const filled = filledRaw.filter(function(entry) {
-        const mDef = String((entry.data || {}).m_def || '');
-        return !mDef || mDef.includes('FilledSubstrateHolderPDI');
-    });
 
-    const referencedFilled = new Set();
-    experiments.forEach(function(entry) {
-        const data = entry.data || {};
-        const holderRef = data.substrate_holder && data.substrate_holder.reference;
-        const id = entryIdFromReference(holderRef);
-        if (id) referencedFilled.add(id);
-    });
+function holderWorkflowStatus(data) {
+    const tags =
+        data && Array.isArray(data.tags)
+            ? data.tags
+            : [];
 
-    const current = [];
-    for (const entry of filled) {
-        let data = entry.data || {};
-        if (!filledPhysicalReference(data)) {
-            try {
-                const archive = await loadHolderArchive(entry.entry_id);
-                data = archive.data || data;
-                entry.data = data;
-                entry._archiveMetadata = archive.metadata || {};
-            } catch (error) {
-                console.warn('Could not resolve filled holder', entry.entry_id, error);
-            }
-        }
-        if (!referencedFilled.has(entry.entry_id) && !isDiscardedLoadout(data)) {
-            current.push(entry);
-        }
+    if (tags.includes('grown')) {
+        return 'grown';
     }
 
-    holderCatalogState = {empty, filled, experiments, current};
-    return holderCatalogState;
+    if (tags.includes('ungrown')) {
+        return 'ungrown';
+    }
+
+    if (tags.includes('empty')) {
+        return 'empty';
+    }
+
+    // Legacy physical holders without a workflow tag
+    // are treated as available until they enter the
+    // new workflow for the first time.
+    return 'empty';
 }
 
+
+function filledHolderTimestamp(entry) {
+    const data = entry && entry.data
+        ? entry.data
+        : {};
+
+    const value = Date.parse(
+        data.datetime || ''
+    );
+
+    return Number.isFinite(value)
+        ? value
+        : 0;
+}
+
+
+function physicalHolderCatalogKey(entry) {
+    const data = entry.data || {};
+
+    return String(
+        data.lab_id ||
+        data.name ||
+        entry.entry_name ||
+        entry.entry_id ||
+        ''
+    ).trim();
+}
+
+
+function canonicalPhysicalHolders(
+    holders,
+    currentByPhysical
+) {
+    const byLabId =
+        new Map();
+
+    holders.forEach(function(entry) {
+        const key =
+            physicalHolderCatalogKey(
+                entry
+            );
+
+        if (!key) {
+            return;
+        }
+
+        function score(candidate) {
+            const data =
+                candidate.data || {};
+
+            const positions =
+                Array.isArray(
+                    data.positions
+                )
+                    ? data.positions
+                    : [];
+
+            const workflowStatus =
+                holderWorkflowStatus(
+                    data
+                );
+
+            const hasCurrentSnapshot =
+                currentByPhysical.has(
+                    candidate.entry_id
+                );
+
+            let value =
+                positions.length;
+
+            /*
+             * A holder referenced by the current,
+             * non-discarded loadout is authoritative.
+             */
+            if (hasCurrentSnapshot) {
+                value += 100000;
+            }
+
+            /*
+             * A non-empty workflow status without a
+             * matching current snapshot is inconsistent.
+             * Prefer a clean empty physical definition.
+             */
+            if (
+                workflowStatus === 'empty'
+            ) {
+                value += 1000;
+            } else if (
+                !hasCurrentSnapshot
+            ) {
+                value -= 10000;
+            }
+
+            return value;
+        }
+
+        const previous =
+            byLabId.get(key);
+
+        if (
+            !previous ||
+            score(entry) >
+                score(previous)
+        ) {
+            byLabId.set(
+                key,
+                entry
+            );
+        }
+    });
+
+    return Array.from(
+        byLabId.values()
+    );
+}
+
+
+async function loadHolderCatalogV2() {
+    const [holdersRaw, filledRaw] =
+        await Promise.all([
+            queryEntriesBySchema(
+                'pdi_nomad_plugin.mbe.instrument.SubstrateHolderPDI',
+                500,
+                [
+                    'entry_id',
+                    'upload_id',
+                    'entry_name',
+                    'data',
+                    'mainfile',
+                    'published'
+                ]
+            ),
+            queryEntriesBySchema(
+                'pdi_nomad_plugin.mbe.instrument.FilledSubstrateHolderPDI',
+                500,
+                [
+                    'entry_id',
+                    'upload_id',
+                    'entry_name',
+                    'data',
+                    'mainfile',
+                    'published'
+                ]
+            )
+        ]);
+
+    const physicalCandidates =
+        holdersRaw.filter(
+            function(entry) {
+                const data =
+                    entry.data || {};
+
+                const mDef =
+                    String(
+                        data.m_def || ''
+                    );
+
+                /*
+                 * FilledSubstrateHolderPDI inherits from
+                 * SubstrateHolderPDI, therefore guard both
+                 * by m_def and by substrate_holder reference.
+                 */
+                return (
+                    !mDef.includes(
+                        'FilledSubstrateHolderPDI'
+                    ) &&
+                    !data.substrate_holder
+                );
+            }
+        );
+
+    const filled =
+        filledRaw.filter(
+            function(entry) {
+                const mDef =
+                    String(
+                        (entry.data || {}).m_def ||
+                        ''
+                    );
+
+                return (
+                    !mDef ||
+                    mDef.includes(
+                        'FilledSubstrateHolderPDI'
+                    )
+                );
+            }
+        );
+
+    /*
+     * Map only CURRENT, non-discarded loadouts
+     * back to their exact physical holder entry.
+     */
+    const currentByPhysical =
+        new Map();
+
+    filled.forEach(function(entry) {
+        const data =
+            entry.data || {};
+
+        if (
+            isDiscardedLoadout(data)
+        ) {
+            return;
+        }
+
+        const physicalId =
+            entryIdFromReference(
+                filledPhysicalReference(
+                    data
+                )
+            );
+
+        if (!physicalId) {
+            return;
+        }
+
+        const previous =
+            currentByPhysical.get(
+                physicalId
+            );
+
+        if (
+            !previous ||
+            filledHolderTimestamp(entry) >
+                filledHolderTimestamp(
+                    previous
+                )
+        ) {
+            currentByPhysical.set(
+                physicalId,
+                entry
+            );
+        }
+    });
+
+    /*
+     * One physical holder per logical lab_id.
+     */
+    const holders =
+        canonicalPhysicalHolders(
+            physicalCandidates,
+            currentByPhysical
+        );
+
+    const canonicalIds =
+        new Set(
+            holders.map(
+                function(entry) {
+                    return entry.entry_id;
+                }
+            )
+        );
+
+    /*
+     * Only current snapshots belonging to the selected
+     * canonical physical holders remain relevant.
+     */
+    const canonicalCurrentByPhysical =
+        new Map();
+
+    currentByPhysical.forEach(
+        function(entry, physicalId) {
+            if (
+                canonicalIds.has(
+                    physicalId
+                )
+            ) {
+                canonicalCurrentByPhysical.set(
+                    physicalId,
+                    entry
+                );
+            }
+        }
+    );
+
+    const current =
+        Array.from(
+            canonicalCurrentByPhysical.values()
+        );
+
+    holderCatalogState = {
+        holders: holders,
+
+        // retained for compatibility
+        empty: holders,
+
+        filled: filled,
+        experiments: [],
+        current: current,
+        currentByPhysical:
+            canonicalCurrentByPhysical
+    };
+
+    return holderCatalogState;
+}
 
 async function loadInsertCatalogV2() {
     try {
@@ -2876,65 +3326,171 @@ async function loadInsertCatalogV2() {
 }
 
 
+function holderDisplayStatus(workflowStatus, hasFilledHolder) {
+    if (workflowStatus === 'empty') {
+        return 'empty';
+    }
+
+    if (hasFilledHolder) {
+        return 'filled · ' + workflowStatus;
+    }
+
+    return workflowStatus;
+}
+
+
 async function initialiseHolderSelect() {
-    const select = document.getElementById('holderSelect');
-    const status = document.getElementById('holderCatalogStatus');
-    select.innerHTML = '<option value="">Loading holders...</option>';
-    if (status) status.textContent = 'Loading physical and filled holders from NOMAD...';
+    const select =
+        document.getElementById(
+            'holderSelect'
+        );
+
+    const status =
+        document.getElementById(
+            'holderCatalogStatus'
+        );
+
+    select.innerHTML =
+        '<option value="">Loading holders...</option>';
+
+    if (status) {
+        status.textContent =
+            'Loading physical holders from NOMAD...';
+    }
 
     try {
-        const catalog = await loadHolderCatalogV2();
+        const catalog =
+            await loadHolderCatalogV2();
+
         await loadInsertCatalogV2();
-        const currentByPhysical = new Map();
-        catalog.current.forEach(function(entry) {
-            const physicalId = entryIdFromReference(filledPhysicalReference(entry.data || {}));
-            if (physicalId) currentByPhysical.set(physicalId, entry);
-        });
 
-        select.innerHTML = '<option value="">Select holder...</option>';
+        select.innerHTML =
+            '<option value="">Select holder...</option>';
 
-        catalog.current
+        const counts = {
+            empty: 0,
+            ungrown: 0,
+            grown: 0
+        };
+
+        catalog.holders
             .slice()
             .sort(function(a, b) {
-                return String(a.entry_name || a.entry_id).localeCompare(String(b.entry_name || b.entry_id));
-            })
-            .forEach(function(entry) {
-                const option = document.createElement('option');
-                option.value = entry.entry_id;
-                option.dataset.kind = 'filled';
-                option.dataset.uploadId = entry.upload_id || '';
-                option.textContent = (entry.entry_name || entry.entry_id) + ' — Current filled holder';
-                select.appendChild(option);
-            });
+                const aData = a.data || {};
+                const bData = b.data || {};
 
-        catalog.empty
-            .filter(function(entry) {
-                return !currentByPhysical.has(entry.entry_id);
-            })
-            .sort(function(a, b) {
-                return String(a.entry_name || a.entry_id).localeCompare(String(b.entry_name || b.entry_id));
+                const aName =
+                    aData.lab_id ||
+                    aData.name ||
+                    a.entry_name ||
+                    a.entry_id;
+
+                const bName =
+                    bData.lab_id ||
+                    bData.name ||
+                    b.entry_name ||
+                    b.entry_id;
+
+                return String(aName)
+                    .localeCompare(
+                        String(bName),
+                        undefined,
+                        {
+                            numeric: true,
+                            sensitivity: 'base'
+                        }
+                    );
             })
             .forEach(function(entry) {
-                const option = document.createElement('option');
-                option.value = entry.entry_id;
-                option.dataset.kind = 'empty';
-                option.dataset.uploadId = entry.upload_id || '';
-                option.textContent = (entry.entry_name || entry.entry_id) + ' — Empty holder';
-                select.appendChild(option);
+                const data =
+                    entry.data || {};
+
+                const workflowStatus =
+                    holderWorkflowStatus(
+                        data
+                    );
+
+                counts[workflowStatus] += 1;
+
+                const currentFilled =
+                    catalog.currentByPhysical.get(
+                        entry.entry_id
+                    );
+
+                const holderName =
+                    data.lab_id ||
+                    data.name ||
+                    entry.entry_name ||
+                    entry.entry_id;
+
+                const option =
+                    document.createElement(
+                        'option'
+                    );
+
+                /*
+                 * IMPORTANT:
+                 * The option always points to the
+                 * PHYSICAL SubstrateHolderPDI.
+                 */
+                option.value =
+                    entry.entry_id;
+
+                option.dataset.kind =
+                    'physical';
+
+                option.dataset.status =
+                    workflowStatus;
+
+                option.dataset.uploadId =
+                    entry.upload_id || '';
+
+                option.dataset.filledEntryId =
+                    (
+                        workflowStatus !== 'empty' &&
+                        currentFilled
+                    )
+                        ? currentFilled.entry_id
+                        : '';
+
+                option.textContent =
+                    holderName +
+                    ' — ' +
+                    holderDisplayStatus(
+                        workflowStatus,
+                        Boolean(currentFilled)
+                    );
+
+                select.appendChild(
+                    option
+                );
             });
 
         if (status) {
             status.textContent =
-                catalog.current.length + ' current filled holder(s); ' +
-                catalog.empty.length + ' physical holder template(s) found.';
+                catalog.holders.length +
+                ' physical holder(s): ' +
+                counts.empty +
+                ' empty, ' +
+                counts.ungrown +
+                ' ungrown, ' +
+                counts.grown +
+                ' grown.';
         }
+
     } catch (error) {
         console.error(error);
-        select.innerHTML = '<option value="">Could not load holders</option>';
-        if (status) status.textContent = 'Error: ' + error.message;
+
+        select.innerHTML =
+            '<option value="">Could not load holders</option>';
+
+        if (status) {
+            status.textContent =
+                'Error: ' +
+                error.message;
+        }
     }
 }
-
 
 function makePositionState(position) {
     return {
@@ -3001,85 +3557,254 @@ function applyFilledOverlay(filledData) {
 
 
 async function selectHolder() {
-    const select = document.getElementById('holderSelect');
-    const entryId = select.value;
-    const option = select.options[select.selectedIndex];
+    const select =
+        document.getElementById(
+            'holderSelect'
+        );
+
+    const entryId =
+        select.value;
+
+    const option =
+        select.options[
+            select.selectedIndex
+        ];
 
     if (!entryId) {
         resetHolderSelection(false);
         return;
     }
 
-    document.getElementById('holderLabel').textContent = 'Loading holder...';
-    document.getElementById('holderGrid').innerHTML = '<p class="small">Loading holder archive...</p>';
+    document
+        .getElementById(
+            'holderLabel'
+        )
+        .textContent =
+        'Loading holder...';
+
+    document
+        .getElementById(
+            'holderGrid'
+        )
+        .innerHTML =
+        '<p class="small">Loading holder archive...</p>';
 
     try {
-        const selectedArchive = await loadHolderArchive(entryId);
-        const selectedData = selectedArchive.data || {};
-        const kind = option.dataset.kind ||
-            (String(selectedData.m_def || '').includes('FilledSubstrateHolderPDI') ? 'filled' : 'empty');
+        /*
+         * Holder selection now ALWAYS starts
+         * from the physical SubstrateHolderPDI.
+         */
+        const physicalArchive =
+            await loadHolderArchive(
+                entryId
+            );
 
-        let physicalArchive = selectedArchive;
-        let physicalEntryId = entryId;
+        const physicalData =
+            physicalArchive.data || {};
+
+        const physicalMetadata =
+            physicalArchive.metadata || {};
+
+        const workflowStatus =
+            holderWorkflowStatus(
+                physicalData
+            );
+
+        const holderName =
+            physicalData.lab_id ||
+            physicalData.name ||
+            option.textContent ||
+            entryId;
+
+        const positions =
+            Array.isArray(
+                physicalData.positions
+            )
+                ? physicalData.positions
+                : [];
+
         let filledHolder = null;
 
-        if (kind === 'filled') {
-            const physicalRef = filledPhysicalReference(selectedData);
-            physicalEntryId = entryIdFromReference(physicalRef);
-            if (!physicalEntryId) {
-                throw new Error('Filled holder has no valid physical holder reference.');
-            }
-            physicalArchive = await loadHolderArchive(physicalEntryId);
+        /*
+         * For occupied holders the physical holder
+         * remains the selectable object.
+         *
+         * The FilledSubstrateHolderPDI is loaded only
+         * as the current occupancy snapshot.
+         */
+        const filledEntryId =
+            option.dataset.filledEntryId ||
+            '';
+
+        if (
+            workflowStatus !== 'empty' &&
+            filledEntryId
+        ) {
+            const filledArchive =
+                await loadHolderArchive(
+                    filledEntryId
+                );
+
+            const filledData =
+                filledArchive.data || {};
+
+            const filledMetadata =
+                filledArchive.metadata || {};
+
             filledHolder = {
-                entryId: entryId,
-                uploadId: (selectedArchive.metadata || {}).upload_id || option.dataset.uploadId || '',
-                name: selectedData.name || option.textContent,
-                mainfile: (selectedArchive.metadata || {}).mainfile || '',
-                published: (selectedArchive.metadata || {}).published === true,
-                data: selectedData,
-                metadata: selectedArchive.metadata || {}
+                entryId:
+                    filledEntryId,
+
+                uploadId:
+                    filledMetadata.upload_id ||
+                    '',
+
+                name:
+                    filledData.name ||
+                    filledEntryId,
+
+                mainfile:
+                    filledMetadata.mainfile ||
+                    '',
+
+                published:
+                    filledMetadata.published ===
+                    true,
+
+                data:
+                    filledData,
+
+                metadata:
+                    filledMetadata
             };
         }
 
-        const physicalData = physicalArchive.data || {};
-        const physicalMetadata = physicalArchive.metadata || {};
-        const holderName = physicalData.lab_id || physicalData.name || option.textContent || physicalEntryId;
-        const positions = Array.isArray(physicalData.positions) ? physicalData.positions : [];
+        if (
+            workflowStatus !== 'empty' &&
+            !filledHolder
+        ) {
+            throw new Error(
+                'Holder is marked "' +
+                workflowStatus +
+                '" but no current filled-holder snapshot could be resolved.'
+            );
+        }
 
         experimentState.holder = {
-            id: holderName,
-            entryId: physicalEntryId,
-            uploadId: physicalMetadata.upload_id || '',
-            archiveData: physicalData,
-            metadata: physicalMetadata,
-            filledHolder: filledHolder,
-            selectedKind: kind
-        };
-        experimentState.positions = {};
-        positions.forEach(function(position) {
-            if (position.name) experimentState.positions[position.name] = makePositionState(position);
-        });
-        if (filledHolder) applyFilledOverlay(selectedData);
-        experimentState.activePositionName = null;
-        experimentState.currentFilledDirty = false;
-        experimentState.experimentSaved = false;
+            id:
+                holderName,
 
-        document.getElementById('holderLabel').textContent =
-            holderName + (filledHolder ? ' · current loadout' : ' · empty');
+            entryId:
+                entryId,
+
+            uploadId:
+                physicalMetadata.upload_id ||
+                option.dataset.uploadId ||
+                '',
+
+            archiveData:
+                physicalData,
+
+            metadata:
+                physicalMetadata,
+
+            filledHolder:
+                filledHolder,
+
+            selectedKind:
+                'physical',
+
+            workflowStatus:
+                workflowStatus
+        };
+
+        updateEmptyHolderButton(
+            workflowStatus
+        );
+
+        experimentState.positions = {};
+
+        positions.forEach(
+            function(position) {
+                if (position.name) {
+                    experimentState.positions[
+                        position.name
+                    ] =
+                        makePositionState(
+                            position
+                        );
+                }
+            }
+        );
+
+        if (filledHolder) {
+            applyFilledOverlay(
+                filledHolder.data
+            );
+        }
+
+        experimentState.activePositionName =
+            null;
+
+        experimentState.currentFilledDirty =
+            false;
+
+        experimentState.experimentSaved =
+            false;
+
+        document
+            .getElementById(
+                'holderLabel'
+            )
+            .textContent =
+            holderName +
+            ' · ' +
+            holderDisplayStatus(
+                workflowStatus,
+                Boolean(filledHolder)
+            );
+
         renderHolderImageV2();
         renderHolder();
-        document.getElementById('substratePicker').style.display = 'none';
+
+        document
+            .getElementById(
+                'substratePicker'
+            )
+            .style.display =
+            'none';
+
         updateCombinedId();
         updateStatePreview();
+
     } catch (error) {
         console.error(error);
+
         resetHolderSelection(false);
-        document.getElementById('holderLabel').textContent = 'Could not load holder';
-        document.getElementById('holderGrid').innerHTML =
-            '<div class="warning">Could not load holder data from NOMAD: ' + escapeHtml(String(error.message || error)) + '</div>';
+
+        document
+            .getElementById(
+                'holderLabel'
+            )
+            .textContent =
+            'Could not load holder';
+
+        document
+            .getElementById(
+                'holderGrid'
+            )
+            .innerHTML =
+            '<div class="warning">' +
+            'Could not load holder data from NOMAD: ' +
+            escapeHtml(
+                String(
+                    error.message ||
+                    error
+                )
+            ) +
+            '</div>';
     }
 }
-
 
 function escapeHtml(value) {
     return String(value || '')
@@ -3121,19 +3846,70 @@ function renderHolderImageV2() {
 
 
 function positionCoordinates(position) {
-    const x = Number(position.x_position);
-    const y = Number(position.y_position);
-    if (Number.isFinite(x) && Number.isFinite(y)) return {x: x, y: y};
-    const rho = Number(position.rho);
-    const theta = Number(position.theta);
-    if (Number.isFinite(rho) && Number.isFinite(theta)) {
-        const rad = theta * Math.PI / 180;
-        return {x: rho * Math.cos(rad), y: rho * Math.sin(rad)};
+    /*
+     * Holder positions are defined by polar coordinates.
+     * Rho + Theta are authoritative.
+     *
+     * x_position / y_position are retained only as
+     * a legacy fallback for older holder definitions.
+     */
+    const rho =
+        Number(
+            position.rho
+        );
+
+    const theta =
+        Number(
+            position.theta
+        );
+
+    if (
+        Number.isFinite(rho) &&
+        Number.isFinite(theta)
+    ) {
+        const rad =
+            theta *
+            Math.PI /
+            180;
+
+        return {
+            x:
+                rho *
+                Math.cos(rad),
+
+            y:
+                -rho *
+                Math.sin(rad)
+        };
     }
-    return {x: 0, y: 0};
+
+    const x =
+        Number(
+            position.x_position
+        );
+
+    const y =
+        Number(
+            position.y_position
+        );
+
+    if (
+        Number.isFinite(x) &&
+        Number.isFinite(y)
+    ) {
+        return {
+            x:
+                x,
+            y:
+                y
+        };
+    }
+
+    return {
+        x: 0,
+        y: 0
+    };
 }
-
-
 
 function geometryNumber(value) {
     if (
@@ -3748,6 +4524,125 @@ function loadoutTimestamp() {
 }
 
 
+
+function holderTagsWithWorkflowStatus(tags, nextStatus) {
+    const reserved =
+        new Set([
+            'empty',
+            'ungrown',
+            'grown'
+        ]);
+
+    const result =
+        (Array.isArray(tags) ? tags : [])
+            .filter(function(tag) {
+                return !reserved.has(tag);
+            });
+
+    if (nextStatus) {
+        result.push(nextStatus);
+    }
+
+    return result;
+}
+
+
+async function setPhysicalHolderWorkflowStatus(nextStatus) {
+    const holder =
+        experimentState.holder;
+
+    if (!holder) {
+        throw new Error(
+            'No physical holder is selected.'
+        );
+    }
+
+    if (
+        !['empty', 'ungrown', 'grown']
+            .includes(nextStatus)
+    ) {
+        throw new Error(
+            'Invalid holder workflow status: ' +
+            nextStatus
+        );
+    }
+
+    const metadata =
+        holder.metadata || {};
+
+    const uploadId =
+        holder.uploadId ||
+        metadata.upload_id ||
+        '';
+
+    const mainfile =
+        metadata.mainfile ||
+        '';
+
+    if (
+        metadata.published === true
+    ) {
+        throw new Error(
+            'Published physical holders are read-only.'
+        );
+    }
+
+    if (
+        !uploadId ||
+        !mainfile
+    ) {
+        throw new Error(
+            'Physical holder lacks upload or mainfile and cannot be updated safely.'
+        );
+    }
+
+    /*
+     * Work on a complete copy of the existing physical
+     * holder archive so no geometry or metadata is lost.
+     */
+    const data =
+        JSON.parse(
+            JSON.stringify(
+                holder.archiveData || {}
+            )
+        );
+
+    data.tags =
+        holderTagsWithWorkflowStatus(
+            data.tags,
+            nextStatus
+        );
+
+    await uploadArchiveDataV2(
+        uploadId,
+        mainfile,
+        data,
+        true
+    );
+
+    /*
+     * Keep the in-memory holder synchronized with NOMAD.
+     */
+    holder.archiveData =
+        data;
+
+    holder.workflowStatus =
+        nextStatus;
+
+    const label =
+        document.getElementById(
+            'holderLabel'
+        );
+
+    if (label) {
+        label.textContent =
+            holder.id +
+            ' · ' +
+            nextStatus;
+    }
+}
+
+
 async function saveFilledHolderToNomad(options) {
     options = options || {};
     const button = document.getElementById('saveFilledHolderButton');
@@ -3792,6 +4687,14 @@ async function saveFilledHolderToNomad(options) {
         if (status && !options.silent) status.textContent = existing ? 'Updating filled holder...' : 'Saving filled holder...';
         const data = filledHolderArchiveData();
         await uploadArchiveDataV2(uploadId, filename, data, overwrite);
+
+        /*
+         * The FilledSubstrateHolderPDI is the occupancy
+         * snapshot. The physical SubstrateHolderPDI carries
+         * the current workflow state.
+         */
+        await setPhysicalHolderWorkflowStatus('ungrown');
+
         experimentState.holder.filledHolder = {
             entryId: entryId,
             uploadId: uploadId,
@@ -3811,15 +4714,25 @@ async function saveFilledHolderToNomad(options) {
         const holderSelect =
             document.getElementById('holderSelect');
 
+        const physicalHolderEntryId =
+            experimentState.holder
+                ? experimentState.holder.entryId
+                : '';
+
         if (
             holderSelect &&
+            physicalHolderEntryId &&
             Array.from(holderSelect.options).some(
                 function(option) {
-                    return option.value === entryId;
+                    return (
+                        option.value ===
+                        physicalHolderEntryId
+                    );
                 }
             )
         ) {
-            holderSelect.value = entryId;
+            holderSelect.value =
+                physicalHolderEntryId;
         }
 
         return nomadArchiveReference(uploadId, entryId);
@@ -3833,93 +4746,325 @@ async function saveFilledHolderToNomad(options) {
 
 
 async function saveExperimentToNomad() {
-    const button = document.getElementById('saveExperimentButton');
-    const status = document.getElementById('experimentSaveStatus');
-    const uploadId = document.getElementById('targetUpload').value;
-    if (!uploadId) { status.textContent = 'Select a target upload first.'; return; }
-    if (!experimentState.growthRunId) { status.textContent = 'Enter a Growth Run ID first.'; return; }
-    if (!experimentState.holder) { status.textContent = 'Select a holder first.'; return; }
+    const button =
+        document.getElementById(
+            'saveExperimentButton'
+        );
+
+    const status =
+        document.getElementById(
+            'experimentSaveStatus'
+        );
+
+    const uploadId =
+        document.getElementById(
+            'targetUpload'
+        ).value;
+
+    if (!uploadId) {
+        status.textContent =
+            'Select a target upload first.';
+        return;
+    }
+
+    if (!experimentState.growthRunId) {
+        status.textContent =
+            'Enter a Growth Run ID first.';
+        return;
+    }
+
+    if (!experimentState.holder) {
+        status.textContent =
+            'Select a holder first.';
+        return;
+    }
+
+    const physicalHolderEntryId =
+        experimentState.holder.entryId;
 
     button.disabled = true;
+
     let filledSavedThisAttempt = false;
+
     try {
         let filledReference;
-        if (!experimentState.holder.filledHolder || experimentState.currentFilledDirty) {
-            status.textContent = 'Saving filled holder...';
-            filledReference = await saveFilledHolderToNomad({silent: true});
-            filledSavedThisAttempt = true;
+
+        if (
+            !experimentState.holder.filledHolder ||
+            experimentState.currentFilledDirty
+        ) {
+            status.textContent =
+                'Saving filled holder...';
+
+            filledReference =
+                await saveFilledHolderToNomad({
+                    silent: true
+                });
+
+            filledSavedThisAttempt =
+                true;
+
         } else {
-            const filled = experimentState.holder.filledHolder;
-            filledReference = nomadArchiveReference(filled.uploadId, filled.entryId);
+            const filled =
+                experimentState.holder.filledHolder;
+
+            filledReference =
+                nomadArchiveReference(
+                    filled.uploadId,
+                    filled.entryId
+                );
         }
 
-        const growthRunId = experimentSafePart(experimentState.growthRunId);
-        if (!growthRunId) throw new Error('Growth Run ID is invalid.');
-        const experimentFilename = growthRunId + '.ExperimentMbe.archive.yaml';
-        const experimentData = experimentArchiveData(filledReference);
-        status.textContent = 'Saving experiment...';
-        await uploadArchiveDataV2(uploadId, experimentFilename, experimentData, false);
+        const growthRunId =
+            experimentSafePart(
+                experimentState.growthRunId
+            );
 
-        experimentState.experimentSaved = true;
+        if (!growthRunId) {
+            throw new Error(
+                'Growth Run ID is invalid.'
+            );
+        }
+
+        const experimentFilename =
+            growthRunId +
+            '.ExperimentMbe.archive.yaml';
+
+        const experimentData =
+            experimentArchiveData(
+                filledReference
+            );
+
         status.textContent =
-            'Experiment saved. NOMAD processing was triggered; linked substrates will be marked grown by the ExperimentMbePDI normalizer.';
-        document.getElementById('startNewExperimentButton').style.display = 'block';
-        updateStatePreview();
+            'Saving experiment...';
 
+        await uploadArchiveDataV2(
+            uploadId,
+            experimentFilename,
+            experimentData,
+            false
+        );
+
+        /*
+         * Experiment exists successfully:
+         * the physical holder now contains grown samples.
+         */
+        await setPhysicalHolderWorkflowStatus(
+            'grown'
+        );
+
+        experimentState.experimentSaved =
+            true;
+
+        /*
+         * A Growth Run ID belongs to exactly one
+         * experiment. Clear it immediately after save.
+         */
+        experimentState.growthRunId =
+            '';
+
+        const growthInput =
+            document.getElementById(
+                'growthRunId'
+            );
+
+        growthInput.value =
+            '';
+
+        updateCombinedId();
+
+        status.textContent =
+            'Experiment saved. Holder is now filled · grown. ' +
+            'Linked substrates are marked grown by the ExperimentMbePDI normalizer.';
+
+        document.getElementById(
+            'startNewExperimentButton'
+        ).style.display =
+            'block';
+
+        /*
+         * Refresh catalogs, but keep the page and target upload.
+         */
         await refreshSubstrateData();
         await initialiseHolderSelect();
 
-        window.location.reload();
+        const holderSelect =
+            document.getElementById(
+                'holderSelect'
+            );
+
+        if (
+            physicalHolderEntryId &&
+            Array.from(holderSelect.options).some(
+                function(option) {
+                    return (
+                        option.value ===
+                        physicalHolderEntryId
+                    );
+                }
+            )
+        ) {
+            holderSelect.value =
+                physicalHolderEntryId;
+
+            await selectHolder();
+        }
+
+        updateStatePreview();
+
     } catch (error) {
-        status.textContent = (filledSavedThisAttempt ?
-            'Filled holder was saved, but the experiment failed: ' : 'Error: ') + error.message;
+        status.textContent =
+            (
+                filledSavedThisAttempt
+                    ? 'Filled holder was saved, but the experiment failed: '
+                    : 'Error: '
+            ) +
+            error.message;
+
     } finally {
-        button.disabled = false;
+        button.disabled =
+            false;
     }
 }
-
 
 async function emptyCurrentHolder() {
-    const status = document.getElementById('filledHolderSaveStatus');
+    const status =
+        document.getElementById(
+            'filledHolderSaveStatus'
+        );
+
     if (!experimentState.holder) {
-        status.textContent = 'Select a holder first.';
+        status.textContent =
+            'Select a holder first.';
         return;
     }
-    const filled = experimentState.holder.filledHolder;
-    if (!filled) {
-        resetHolderSelection(true);
-        status.textContent = 'Unsaved loadout cleared; physical holder is available.';
-        return;
-    }
-    if (filled.published) {
-        status.textContent = 'Published filled holders are read-only and cannot be emptied.';
-        return;
-    }
-    if (!filled.uploadId || !filled.mainfile) {
-        status.textContent = 'Filled holder cannot be updated safely because its raw file is unknown.';
-        return;
-    }
+
+    const holder =
+        experimentState.holder;
+
+    const workflowStatus =
+        holder.workflowStatus ||
+        holderWorkflowStatus(
+            holder.archiveData || {}
+        );
+
+    const filled =
+        holder.filledHolder;
 
     try {
-        const data = filledHolderArchiveData();
-        const tags = Array.isArray(data.tags) ? data.tags.slice() : [];
-        if (!tags.includes('discarded_loadout')) tags.push('discarded_loadout');
-        data.tags = tags;
-        await uploadArchiveDataV2(filled.uploadId, filled.mainfile, data, true);
-        status.textContent = 'Holder released. The unused loadout was retained in NOMAD and marked discarded.';
+        /*
+         * No saved FilledSubstrateHolder exists:
+         * just release the physical holder.
+         */
+        if (!filled) {
+            await setPhysicalHolderWorkflowStatus(
+                'empty'
+            );
+
+            resetHolderSelection(true);
+
+            await initialiseHolderSelect();
+
+            status.textContent =
+                'Holder is empty and available.';
+
+            return;
+        }
+
+        if (filled.published) {
+            status.textContent =
+                'Published filled holders are read-only.';
+            return;
+        }
+
+        /*
+         * A grown loadout is historical experiment data.
+         * Never mark it as discarded.
+         *
+         * Taking samples off only changes the CURRENT
+         * physical holder state.
+         */
+        if (workflowStatus === 'grown') {
+            await setPhysicalHolderWorkflowStatus(
+                'empty'
+            );
+
+            resetHolderSelection(true);
+
+            await initialiseHolderSelect();
+
+            status.textContent =
+                'Samples removed. Historical grown loadout retained; holder is now empty.';
+
+            return;
+        }
+
+        /*
+         * Ungrown holder:
+         * this is a prepared loadout that was abandoned
+         * before a growth experiment was completed.
+         */
+        if (
+            !filled.uploadId ||
+            !filled.mainfile
+        ) {
+            status.textContent =
+                'Filled holder cannot be updated safely because its raw file is unknown.';
+            return;
+        }
+
+        const data =
+            filledHolderArchiveData();
+
+        const tags =
+            Array.isArray(data.tags)
+                ? data.tags.slice()
+                : [];
+
+        if (
+            !tags.includes(
+                'discarded_loadout'
+            )
+        ) {
+            tags.push(
+                'discarded_loadout'
+            );
+        }
+
+        data.tags =
+            tags;
+
+        await uploadArchiveDataV2(
+            filled.uploadId,
+            filled.mainfile,
+            data,
+            true
+        );
+
+        await setPhysicalHolderWorkflowStatus(
+            'empty'
+        );
+
         resetHolderSelection(true);
+
         await initialiseHolderSelect();
+
+        status.textContent =
+            'Unused loadout retained in NOMAD as discarded; holder is now empty.';
+
     } catch (error) {
-        status.textContent = 'Error: ' + error.message;
+        status.textContent =
+            'Error: ' +
+            error.message;
     }
 }
-
 
 function resetHolderSelection(clearSelect) {
     experimentState.holder = null;
     experimentState.positions = {};
     experimentState.activePositionName = null;
     experimentState.currentFilledDirty = false;
+    updateEmptyHolderButton('empty');
     if (clearSelect) document.getElementById('holderSelect').value = '';
     document.getElementById('holderLabel').textContent = 'No holder selected';
     document.getElementById('holderGrid').innerHTML = '';
@@ -3956,13 +5101,35 @@ function updateCombinedId() {
 
 
 async function initialiseWorkflowV2() {
-    loadUploads();
+    installTargetUploadPersistence();
+
+    await loadUploads();
+    restoreTargetUploadSelection();
+
+    /*
+     * Growth Run IDs are never persisted between
+     * completed/reloaded experiment sessions.
+     */
+    experimentState.growthRunId = '';
+
+    const growthInput =
+        document.getElementById(
+            'growthRunId'
+        );
+
+    if (growthInput) {
+        growthInput.value = '';
+    }
+
     initialiseSubstrateFilterEvents();
+
     await Promise.all([
         initialiseSubstrates(),
         initialiseTreatmentHistory(),
         initialiseHolderSelect()
     ]);
+
+    updateCombinedId();
     updateStatePreview();
 }
 

@@ -11,6 +11,7 @@ from nomad.datamodel.metainfo.basesections import (
     Process,
 )
 from nomad.metainfo import (
+    MEnum,
     Category,
     Quantity,
     Reference,
@@ -22,8 +23,10 @@ from nomad.metainfo import (
 from nomad_material_processing.general import (
     Annealing,
     AnnealingRecipe,
+    AnnealingStep,
     Cleaning,
     CleaningRecipe,
+    CleaningStep,
     Etching,
     EtchingRecipe,
     Geometry,
@@ -187,6 +190,33 @@ class EtchingRecipePDI(EtchingPDI, EtchingRecipe):
     )
 
 
+class AnnealingStepPDI(AnnealingStep):
+    """PDI annealing step using operation temperature and optional ramp rate."""
+
+    m_def = Section(label='Annealing step')
+
+    operation_temperature = Quantity(
+        type=float,
+        unit='celsius',
+        description='Operation temperature held during this annealing step.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            label='Operation temperature',
+            defaultDisplayUnit='celsius',
+        ),
+    )
+
+    ramp_rate = Quantity(
+        type=float,
+        unit='kelvin / second',
+        description='Temperature ramp rate. The Lab Library UI accepts °C/min or °C/s.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            label='Ramp rate',
+        ),
+    )
+
+
 class AnnealingRecipePDI(AnnealingRecipe):
     """
     A recipe for the process of heating a material to a specific temperature
@@ -199,6 +229,52 @@ class AnnealingRecipePDI(AnnealingRecipe):
         categories=[PDICategory],
     )
 
+    atmosphere = Quantity(
+        type=str,
+        description='Gas atmosphere used during annealing, e.g. O2, N2, Ar, air, or vacuum.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.StringEditQuantity,
+            label='Atmosphere',
+        ),
+    )
+
+    gas_flow_sccm = Quantity(
+        type=float,
+        description='Gas flow in standard cubic centimetres per minute (sccm).',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            label='Gas flow (sccm)',
+        ),
+    )
+
+    rf_power_w = Quantity(
+        type=float,
+        description='RF plasma power in watts. Used for annealing in the MBE growth chamber.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            label='RF power (W)',
+        ),
+    )
+
+    steps = SubSection(
+        section_def=AnnealingStepPDI,
+        repeats=True,
+        description='Annealing process steps.',
+    )
+
+
+class CleaningStepPDI(CleaningStep):
+    """
+    Cleaning step adapted to the equipment available at PDI.
+    """
+
+    m_def = Section(label='CleaningStepPDI')
+
+    agitation = Quantity(
+        type=MEnum('Hot plate', 'Ultrasonic bath'),
+        description='Agitation or heating method used during cleaning.',
+    )
+
 
 class CleaningRecipePDI(CleaningRecipe):
     """
@@ -208,6 +284,12 @@ class CleaningRecipePDI(CleaningRecipe):
     m_def = Section(
         label='CleaningRecipe',
         categories=[PDICategory],
+    )
+
+    steps = SubSection(
+        section_def=CleaningStepPDI,
+        repeats=True,
+        description='Cleaning process steps.',
     )
 
 
@@ -313,6 +395,26 @@ class BackSideCoatingPDI(ProcessPDI, Process, EntryData):
     )
     coating_reagents = SubSection(
         section_def=CompositeSystemReference,
+    )
+
+    coating_material = Quantity(
+        type=MEnum('Ti', 'SrRuO3'),
+        description='Material deposited on the back side of the substrate.',
+        a_eln={
+            'component': 'EnumEditQuantity',
+            'label': 'Coating material',
+        },
+    )
+
+    thickness = Quantity(
+        type=np.float64,
+        unit='meter',
+        description='Thickness of the back-side coating.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            label='Thickness',
+            defaultDisplayUnit='micrometer',
+        ),
     )
 
     def normalize(self, archive, logger: 'BoundLogger') -> None:

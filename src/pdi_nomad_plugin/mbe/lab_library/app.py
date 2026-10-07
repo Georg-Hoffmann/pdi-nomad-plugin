@@ -18,7 +18,7 @@ LIBRARY_TYPES = {
         'kind': 'processing_recipe',
         'schemas': {
             'cleaning': {
-                'label': 'Cleaning',
+                'label': 'Chemical treatment',
                 'schema': 'pdi_nomad_plugin.general.schema.CleaningRecipePDI',
                 'id_prefix': 'CLEAN',
                 'usage_schemas': [
@@ -31,14 +31,6 @@ LIBRARY_TYPES = {
                 'id_prefix': 'ANNEAL',
                 'usage_schemas': [
                     'pdi_nomad_plugin.general.schema.AnnealingPDI',
-                ],
-            },
-            'etching': {
-                'label': 'Etching',
-                'schema': 'pdi_nomad_plugin.general.schema.EtchingRecipePDI',
-                'id_prefix': 'ETCH',
-                'usage_schemas': [
-                    'pdi_nomad_plugin.general.schema.EtchingPDI',
                 ],
             },
             'back_side_coating': {

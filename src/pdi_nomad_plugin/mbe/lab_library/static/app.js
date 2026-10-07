@@ -455,6 +455,175 @@ function renderLibrary() {
     list.appendChild(create);
 }
 
+
+const HOLDER_SYSTEM_STATES = [
+    'empty',
+    'ungrown',
+    'grown'
+];
+
+
+function holderSystemState(data) {
+    const tags =
+        data && Array.isArray(data.tags)
+            ? data.tags
+            : [];
+
+    if (tags.includes('grown')) return 'grown';
+    if (tags.includes('ungrown')) return 'ungrown';
+    if (tags.includes('empty')) return 'empty';
+
+    return 'empty';
+}
+
+
+function isPhysicalHolderLibraryItem(item) {
+    const data = item.data || {};
+    const mDef = String(data.m_def || '');
+
+    if (
+        mDef.includes(
+            'FilledSubstrateHolderPDI'
+        )
+    ) {
+        return false;
+    }
+
+    /*
+     * FilledSubstrateHolderPDI contains a reference
+     * to the physical holder. This is an additional
+     * guard for older entries where m_def is incomplete.
+     */
+    if (data.substrate_holder) {
+        return false;
+    }
+
+    return true;
+}
+
+
+function physicalHolderKey(item) {
+    const data = item.data || {};
+
+    return String(
+        data.lab_id ||
+        data.name ||
+        item.entryName ||
+        item.entryId ||
+        ''
+    ).trim();
+}
+
+
+function physicalHolderScore(item) {
+    const data = item.data || {};
+    const tags =
+        Array.isArray(data.tags)
+            ? data.tags
+            : [];
+
+    const positions =
+        Array.isArray(data.positions)
+            ? data.positions
+            : [];
+
+    let score =
+        positions.length;
+
+    /*
+     * Prefer an entry already carrying our current
+     * workflow state.
+     */
+    if (
+        tags.some(function(tag) {
+            return HOLDER_SYSTEM_STATES.includes(tag);
+        })
+    ) {
+        score += 10000;
+    }
+
+    /*
+     * If duplicate physical holder definitions exist,
+     * prefer the one already referenced by NOMAD.
+     */
+    try {
+        if (itemUsage(item).locked) {
+            score += 1000;
+        }
+    } catch (_) {}
+
+    return score;
+}
+
+
+function canonicalPhysicalHolderItems(items) {
+    const holders =
+        new Map();
+
+    (items || [])
+        .filter(
+            isPhysicalHolderLibraryItem
+        )
+        .forEach(function(item) {
+            const key =
+                physicalHolderKey(item);
+
+            if (!key) {
+                return;
+            }
+
+            const previous =
+                holders.get(key);
+
+            if (
+                !previous ||
+                physicalHolderScore(item) >
+                    physicalHolderScore(previous)
+            ) {
+                holders.set(
+                    key,
+                    item
+                );
+            }
+        });
+
+    return Array.from(
+        holders.values()
+    );
+}
+
+
+function managedHolderTags(data) {
+    const id =
+        String(
+            data.lab_id ||
+            data.name ||
+            ''
+        ).trim();
+
+    const state =
+        holderSystemState(data);
+
+    return Array.from(
+        new Set(
+            [id, state].filter(Boolean)
+        )
+    );
+}
+
+
+function managedInsertTags(data) {
+    const id =
+        String(
+            data.lab_id ||
+            data.name ||
+            ''
+        ).trim();
+
+    return id ? [id] : [];
+}
+
+
 async function loadCurrentType() {
     const status = document.getElementById('libraryStatus');
     status.textContent = 'Loading ' + currentLabel().toLowerCase() + ' from NOMAD...';
@@ -465,6 +634,13 @@ async function loadCurrentType() {
         } else {
             currentItems = await queryEntriesBySchema(currentSchema());
         }
+        if (currentType === 'holder') {
+            currentItems =
+                canonicalPhysicalHolderItems(
+                    currentItems
+                );
+        }
+
         currentItems = [...currentItems].sort(function(a,b) {
             return itemTitle(a).localeCompare(itemTitle(b));
         });
@@ -488,30 +664,422 @@ function viewRow(label, value) {
     return '<div class="view-label">' + escapeHtml(label) + '</div><div>' + escapeHtml(value) + '</div>';
 }
 
+function readonlyViewField(label, value) {
+    const display =
+        value === undefined || value === null || value === ''
+            ? '—'
+            : String(value);
+
+    return `
+        <div>
+            <label>${escapeHtml(label)}</label>
+            <input
+                type="text"
+                readonly
+                value="${escapeHtml(display)}">
+        </div>
+    `;
+}
+
+function readonlyViewTextarea(label, value) {
+    const display =
+        value === undefined || value === null || value === ''
+            ? ''
+            : String(value);
+
+    return `
+        <div>
+            <label>${escapeHtml(label)}</label>
+            <textarea readonly>${escapeHtml(display)}</textarea>
+        </div>
+    `;
+}
+
+function yamlScalar(value) {
+    if (value === null) return 'null';
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+    }
+
+    const text = String(value);
+
+    if (
+        text !== '' &&
+        /^[A-Za-z0-9_.\/+\- ]+$/.test(text) &&
+        !/^(true|false|null|yes|no)$/i.test(text)
+    ) {
+        return text;
+    }
+
+    return JSON.stringify(text);
+}
+
+function archiveToYaml(value, indent) {
+    indent = indent || 0;
+    const pad = ' '.repeat(indent);
+
+    if (Array.isArray(value)) {
+        if (!value.length) return pad + '[]';
+
+        return value.map(function(item) {
+            if (item !== null && typeof item === 'object') {
+                return pad + '-\n' + archiveToYaml(item, indent + 2);
+            }
+            return pad + '- ' + yamlScalar(item);
+        }).join('\n');
+    }
+
+    if (value !== null && typeof value === 'object') {
+        const entries = Object.entries(value);
+
+        if (!entries.length) return pad + '{}';
+
+        return entries.map(function(pair) {
+            const key = pair[0];
+            const item = pair[1];
+
+            if (item !== null && typeof item === 'object') {
+                return pad + key + ':\n' +
+                    archiveToYaml(item, indent + 2);
+            }
+
+            return pad + key + ': ' + yamlScalar(item);
+        }).join('\n');
+    }
+
+    return pad + yamlScalar(value);
+}
+
+function cleaningReadonlyView(data) {
+    const steps =
+        Array.isArray(data.steps) && data.steps.length
+            ? data.steps
+            : [];
+
+    const stepsHtml = steps.map(function(step, index) {
+        const reagent = cleaningReagentName(step) || step.name || '—';
+
+        const duration =
+            step.duration !== undefined && step.duration !== null
+                ? formatNumber(Number(step.duration) / 60)
+                : '—';
+
+        const temperature =
+            step.temperature !== undefined && step.temperature !== null
+                ? formatNumber(Number(step.temperature))
+                : '—';
+
+        const agitation = step.agitation || 'None';
+
+        return `
+            <div class="cleaning-step-row">
+                <div class="cleaning-step-heading">
+                    <strong>Step ${index + 1}</strong>
+                </div>
+
+                <div class="cleaning-step-primary">
+                    ${readonlyViewField('Reagent / medium', reagent)}
+                    ${readonlyViewField('Duration (min)', duration)}
+                    ${readonlyViewField('Temperature (°C)', temperature)}
+                </div>
+
+                <div class="cleaning-step-secondary">
+                    ${readonlyViewField('Agitation', agitation)}
+                    ${readonlyViewField('Comment', step.comment || '—')}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    return `
+        <div class="cleaning-layout">
+            <div class="cleaning-left-column">
+                <h3>Recipe</h3>
+
+                ${readonlyViewField('Recipe name', data.name || '—')}
+                ${readonlyViewField('Treatment type', data.method || '—')}
+                ${readonlyViewTextarea('Description', data.description || '')}
+            </div>
+
+            <div class="cleaning-right-column">
+                <div class="cleaning-steps-heading">
+                    <h3>Process steps</h3>
+                </div>
+
+                ${
+                    stepsHtml ||
+                    '<div class="muted">No process steps stored.</div>'
+                }
+            </div>
+        </div>
+    `;
+}
+
+function annealingReadonlyView(data) {
+    const instrument =
+        data.location ||
+        (
+            Array.isArray(data.instruments) &&
+            data.instruments[0] &&
+            data.instruments[0].name
+        ) ||
+        '—';
+
+    const atmosphere = data.atmosphere || '—';
+
+    const steps =
+        Array.isArray(data.steps) && data.steps.length
+            ? data.steps
+            : [];
+
+    const stepsHtml = steps.map(function(step, index) {
+        const temperature =
+            step.operation_temperature !== undefined &&
+            step.operation_temperature !== null
+                ? formatNumber(Number(step.operation_temperature))
+                : '—';
+
+        const duration =
+            step.duration !== undefined && step.duration !== null
+                ? formatNumber(Number(step.duration) / 60)
+                : '—';
+
+        const rampRate =
+            step.ramp_rate !== undefined &&
+            step.ramp_rate !== null
+                ? formatNumber(Number(step.ramp_rate) * 60)
+                : '—';
+
+        return `
+            <div class="annealing-step-row">
+                <div class="annealing-step-heading">
+                    <strong>Step ${index + 1}</strong>
+                </div>
+
+                <div class="annealing-step-fields">
+                    ${readonlyViewField(
+                        'Operation temperature (°C)',
+                        temperature
+                    )}
+
+                    ${readonlyViewField(
+                        'Duration (min)',
+                        duration
+                    )}
+
+                    ${readonlyViewField(
+                        'Ramp rate (°C/min)',
+                        rampRate
+                    )}
+                </div>
+
+                ${readonlyViewField(
+                    'Comment',
+                    step.comment || '—'
+                )}
+            </div>
+        `;
+    }).join('');
+
+    let conditions = '';
+    conditions += readonlyViewField(
+        'Instrument / location',
+        instrument
+    );
+    conditions += readonlyViewField(
+        'Gas / atmosphere',
+        atmosphere
+    );
+
+    if (atmosphere !== 'Vacuum') {
+        conditions += readonlyViewField(
+            'Gas flow (sccm)',
+            data.gas_flow_sccm !== undefined
+                ? formatNumber(Number(data.gas_flow_sccm))
+                : '—'
+        );
+    }
+
+    if (instrument === 'MBE growth chamber') {
+        conditions += readonlyViewField(
+            'RF power (W)',
+            data.rf_power_w !== undefined
+                ? formatNumber(Number(data.rf_power_w))
+                : '—'
+        );
+    }
+
+    return `
+        <div class="annealing-layout">
+            <div class="annealing-left-column">
+                <h3>Recipe</h3>
+
+                ${readonlyViewField('Recipe name', data.name || '—')}
+                ${readonlyViewTextarea(
+                    'Description',
+                    data.description || ''
+                )}
+            </div>
+
+            <div class="annealing-right-column">
+                <h3>Conditions</h3>
+
+                <div class="field-grid">
+                    ${conditions}
+                </div>
+
+                <div class="annealing-steps-heading">
+                    <h3>Process steps</h3>
+                </div>
+
+                ${
+                    stepsHtml ||
+                    '<div class="muted">No process steps stored.</div>'
+                }
+            </div>
+        </div>
+    `;
+}
+
+function backSideCoatingReadonlyView(data) {
+    const material =
+        data.coating_material ||
+        (
+            data.coating_reagents &&
+            data.coating_reagents.name
+        ) ||
+        '—';
+
+    const thicknessUm =
+        data.thickness !== undefined &&
+        data.thickness !== null
+            ? formatNumber(Number(data.thickness) * 1e6)
+            : '—';
+
+    return `
+        <h3>Back-side coating</h3>
+        <div class="field-grid">
+            ${readonlyViewField('Coating material', material)}
+            ${readonlyViewField('Thickness (µm)', thicknessUm)}
+        </div>
+    `;
+}
+
+
 function openView(item) {
     const data = item.data || {};
-    document.getElementById('modalTitle').textContent = itemTitle(item);
-    document.getElementById('modalSubtitle').textContent = currentLabel() + ' · ' + item.entryId;
+
+    document.getElementById('modalTitle').textContent =
+        itemTitle(item);
+
+    document.getElementById('modalSubtitle').textContent =
+        currentLabel() + ' · ' + item.entryId;
+
     const panel = document.getElementById('viewPanel');
+
     document.getElementById('editorForm').classList.add('hidden');
     panel.classList.remove('hidden');
 
-    let summary = '';
-    summary += viewRow('Type', currentLabel());
-    summary += viewRow('ID', data.lab_id || '—');
     const usage = itemUsage(item);
-    summary += viewRow(
+
+    let metadata = '';
+    metadata += viewRow('ID', data.lab_id || '—');
+    metadata += viewRow(
         'State',
         usage.locked
             ? 'Locked / referenced'
-            : (item.published ? 'Published / read-only' : 'Unused / editable')
+            : (
+                item.published
+                    ? 'Published / read-only'
+                    : 'Unused / editable'
+            )
     );
-    summary += viewRow('References', usage.count ? String(usage.count) : '0');
-    summary += viewRow('Mainfile', item.mainfile || '—');
-    panel.innerHTML =
-        '<div class="view-grid">' + summary + '</div>' +
-        '<h3>Archive data</h3><div class="view-raw">' +
-        escapeHtml(JSON.stringify(data, null, 2)) + '</div>';
+    metadata += viewRow(
+        'References',
+        usage.count ? String(usage.count) : '0'
+    );
+    metadata += viewRow(
+        'Mainfile',
+        item.mainfile || '—'
+    );
+
+    let formHtml = '';
+
+    if (
+        currentType === 'processing_recipe' &&
+        currentSubtype === 'cleaning'
+    ) {
+        formHtml = cleaningReadonlyView(data);
+    } else if (
+        currentType === 'processing_recipe' &&
+        currentSubtype === 'annealing'
+    ) {
+        formHtml = annealingReadonlyView(data);
+    } else if (
+        currentType === 'processing_recipe' &&
+        currentSubtype === 'back_side_coating'
+    ) {
+        formHtml = backSideCoatingReadonlyView(data);
+    } else {
+        let summary = '';
+        summary += viewRow('Type', currentLabel());
+        summary += metadata;
+
+        formHtml =
+            '<div class="view-grid">' +
+            summary +
+            '</div>';
+    }
+
+    const yamlText =
+        'data:\n' + archiveToYaml(data, 2);
+
+    panel.innerHTML = `
+        <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+            <button
+                type="button"
+                id="toggleRawArchive">
+                View YAML
+            </button>
+        </div>
+
+        <div id="formattedArchiveView">
+            ${formHtml}
+
+            <h3>Entry information</h3>
+            <div class="view-grid">
+                ${metadata}
+            </div>
+        </div>
+
+        <div id="rawArchiveView" class="hidden">
+            <h3>YAML archive</h3>
+            <div class="view-raw">${escapeHtml(yamlText)}</div>
+        </div>
+    `;
+
+    const button =
+        document.getElementById('toggleRawArchive');
+
+    const formatted =
+        document.getElementById('formattedArchiveView');
+
+    const raw =
+        document.getElementById('rawArchiveView');
+
+    button.addEventListener('click', function() {
+        const showingRaw =
+            !raw.classList.contains('hidden');
+
+        raw.classList.toggle('hidden', showingRaw);
+        formatted.classList.toggle('hidden', !showingRaw);
+
+        button.textContent =
+            showingRaw
+                ? 'View YAML'
+                : 'Back to form';
+    });
+
     openModal();
 }
 
@@ -590,12 +1158,129 @@ function nextSequentialId(prefix, items) {
     return prefix + '_' + String(max + 1).padStart(3, '0');
 }
 
+function recipeNameIdPart(value) {
+    return String(value || '')
+        .trim()
+        .replace(/\s+/g, '_')
+        .replace(/[^A-Za-z0-9_-]/g, '')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+}
+
+function nextNamedRecipeId(prefix, recipeName, items) {
+    const namePart = recipeNameIdPart(recipeName);
+
+    if (!namePart) {
+        return prefix + '_01';
+    }
+
+    const base = prefix + '_' + namePart + '_';
+    let max = 0;
+
+    (items || []).forEach(function(item) {
+        const id = String((item.data || {}).lab_id || '');
+        if (!id.startsWith(base)) return;
+
+        const suffix = id.slice(base.length);
+        if (/^\d+$/.test(suffix)) {
+            max = Math.max(max, Number(suffix));
+        }
+    });
+
+    return base + String(max + 1).padStart(2, '0');
+}
+
+function annealingInstrumentCode(value) {
+    const codes = {
+        'Tube furnace – MBE lab': 'TF-MBE',
+        'Tube furnace – 6th floor': 'TF-6',
+        'MBE growth chamber': 'GC',
+        'MBE 2nd transfer chamber': 'TC2'
+    };
+    return codes[String(value || '')] || 'INST';
+}
+
 function generatedId() {
+    if (
+        currentType === 'processing_recipe' &&
+        currentSubtype === 'cleaning'
+    ) {
+        return generatedCleaningRecipeId();
+    }
+
+    if (
+        currentType === 'processing_recipe' &&
+        currentSubtype === 'annealing'
+    ) {
+        return generatedAnnealingRecipeId();
+    }
+
     if (currentType === 'processing_recipe') {
         const prefix = currentDefinition().id_prefix || 'RECIPE';
+
         if (editorMode === 'edit' && editorItem && (editorItem.data || {}).lab_id) {
             return editorItem.data.lab_id;
         }
+
+        if (currentSubtype === 'cleaning') {
+            const nameInput = document.getElementById('chemicalTreatmentName');
+            return nextNamedRecipeId(
+                prefix,
+                nameInput ? nameInput.value : '',
+                allProcessingCatalogs[currentSubtype] || []
+            );
+        }
+
+        if (currentSubtype === 'annealing') {
+            const nameInput = document.getElementById('annealingRecipeName');
+            const instrumentInput = document.getElementById('annealingInstrument');
+
+            const instrumentCode = annealingInstrumentCode(
+                instrumentInput ? instrumentInput.value : ''
+            );
+
+            const recipeName = nameInput ? nameInput.value : '';
+
+            return nextNamedRecipeId(
+                prefix,
+                instrumentCode + (recipeName ? '_' + recipeName : ''),
+                allProcessingCatalogs[currentSubtype] || []
+            );
+        }
+
+        if (currentSubtype === 'back_side_coating') {
+            const materialInput =
+                document.getElementById('backCoatingMaterial');
+
+            const thicknessInput =
+                document.getElementById('backCoatingThickness');
+
+            const material =
+                materialInput ? materialInput.value : 'Ti';
+
+            const raw =
+                thicknessInput ? thicknessInput.value.trim() : '';
+
+            let namePart = material;
+
+            if (raw !== '') {
+                const thickness = Number(raw);
+
+                if (Number.isFinite(thickness) && thickness > 0) {
+                    const token =
+                        formatNumber(thickness).replace('.', 'p');
+
+                    namePart += '_' + token + 'um';
+                }
+            }
+
+            return nextNamedRecipeId(
+                prefix,
+                namePart,
+                allProcessingCatalogs[currentSubtype] || []
+            );
+        }
+
         return nextSequentialId(prefix, allProcessingCatalogs[currentSubtype] || []);
     }
 
@@ -626,6 +1311,394 @@ function generatedId() {
     return '—';
 }
 
+
+function recipeIdNumber(value) {
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return '';
+    }
+
+    return String(Number(number.toFixed(6)))
+        .replace('.', 'p');
+}
+
+
+function cleaningReagentAbbreviation(name) {
+    const value = String(name || '').trim();
+
+    const known = {
+        'Isobutyl alcohol': 'But',
+        'Acetone': 'Ace',
+        'Isopropanol': 'prop',
+        'DI water': 'DI_H2O',
+        'HF': 'HF',
+        "King's water": 'KiWa',
+        'Kingswater': 'KiWa'
+    };
+
+    if (known[value]) {
+        return known[value];
+    }
+
+    const cleaned = value
+        .replace(/[^A-Za-z0-9]+/g, '')
+        .trim();
+
+    if (!cleaned) {
+        return '';
+    }
+
+    if (cleaned.length <= 3) {
+        return cleaned;
+    }
+
+    return (
+        cleaned.charAt(0).toUpperCase() +
+        cleaned.slice(1, 3).toLowerCase()
+    );
+}
+
+
+function cleaningDurationId(values) {
+    const durations = values
+        .map(Number)
+        .filter(Number.isFinite);
+
+    if (!durations.length) {
+        return '';
+    }
+
+    /*
+     * If all steps are <= 60 min, keep the compact form:
+     *
+     * 10, 10, 10 -> 10_10_10min
+     */
+    if (durations.every(value => value <= 60)) {
+        return (
+            durations
+                .map(recipeIdNumber)
+                .join('_') +
+            'min'
+        );
+    }
+
+    /*
+     * With mixed minutes/hours, put a unit on every value
+     * to keep the ID unambiguous.
+     *
+     * 10, 90, 30 -> 10min_1p5h_30min
+     */
+    return durations.map(function(minutes) {
+        if (minutes > 60) {
+            return (
+                recipeIdNumber(minutes / 60) +
+                'h'
+            );
+        }
+
+        return (
+            recipeIdNumber(minutes) +
+            'min'
+        );
+    }).join('_');
+}
+
+
+function cleaningTemperatureId(values) {
+    const temperatures = values
+        .map(Number)
+        .filter(function(value) {
+            return Number.isFinite(value) &&
+                   value > 50;
+        });
+
+    if (!temperatures.length) {
+        return '';
+    }
+
+    return (
+        temperatures
+            .map(recipeIdNumber)
+            .join('_') +
+        'C'
+    );
+}
+
+
+function generatedCleaningRecipeId() {
+    const rows = Array.from(
+        document.querySelectorAll(
+            '#cleaningSteps .cleaning-step-row'
+        )
+    );
+
+    const reagents = [];
+    const durations = [];
+    const temperatures = [];
+    const devices = [];
+    const seenDevices = new Set();
+
+    rows.forEach(function(row) {
+        const reagentSelect =
+            row.querySelector(
+                '.cleaning-reagent'
+            );
+
+        let reagent =
+            reagentSelect
+                ? reagentSelect.value
+                : '';
+
+        if (reagent === '__custom__') {
+            const custom =
+                row.querySelector(
+                    '.cleaning-reagent-custom'
+                );
+
+            reagent =
+                custom
+                    ? custom.value.trim()
+                    : '';
+        }
+
+        const reagentId =
+            cleaningReagentAbbreviation(
+                reagent
+            );
+
+        if (reagentId) {
+            reagents.push(reagentId);
+        }
+
+
+        const durationInput =
+            row.querySelector(
+                '.cleaning-duration'
+            );
+
+        if (
+            durationInput &&
+            durationInput.value !== ''
+        ) {
+            const duration =
+                Number(durationInput.value);
+
+            if (Number.isFinite(duration)) {
+                durations.push(duration);
+            }
+        }
+
+
+        const temperatureInput =
+            row.querySelector(
+                '.cleaning-temperature'
+            );
+
+        if (
+            temperatureInput &&
+            temperatureInput.value !== ''
+        ) {
+            const temperature =
+                Number(
+                    temperatureInput.value
+                );
+
+            if (
+                Number.isFinite(temperature) &&
+                temperature > 50
+            ) {
+                temperatures.push(
+                    temperature
+                );
+            }
+        }
+
+
+        const agitation =
+            row.querySelector(
+                '.cleaning-agitation'
+            );
+
+        const value =
+            agitation
+                ? agitation.value
+                : '';
+
+        let device = '';
+
+        if (
+            value === 'Ultrasonic bath'
+        ) {
+            device = 'US';
+        } else if (
+            value === 'Hot plate' ||
+            value === 'Heating plate'
+        ) {
+            device = 'HP';
+        }
+
+        if (
+            device &&
+            !seenDevices.has(device)
+        ) {
+            seenDevices.add(device);
+            devices.push(device);
+        }
+    });
+
+
+    const parts = ['Clean'];
+
+    if (reagents.length) {
+        parts.push(
+            reagents.join('_')
+        );
+    }
+
+    const durationPart =
+        cleaningDurationId(
+            durations
+        );
+
+    if (durationPart) {
+        parts.push(durationPart);
+    }
+
+    const temperaturePart =
+        cleaningTemperatureId(
+            temperatures
+        );
+
+    if (temperaturePart) {
+        parts.push(temperaturePart);
+    }
+
+    if (devices.length) {
+        parts.push(
+            devices.join('_')
+        );
+    }
+
+    return parts.join('_');
+}
+
+
+
+function annealingInstrumentAbbreviation(name) {
+    const known = {
+        'Tube furnace – MBE lab': 'TF',
+        'Tube furnace – 6th floor': 'TF',
+        'Oven Chemlab': 'OCL',
+        'Rapid Thermal Annealing': 'RTA',
+        'MBE growth chamber': 'MBE',
+        'MBE 2nd transfer chamber': 'MBE2T'
+    };
+
+    return known[String(name || '').trim()] || 'Ann';
+}
+
+
+function annealingTemperatureId(values) {
+    const temperatures = values
+        .map(Number)
+        .filter(Number.isFinite);
+
+    if (!temperatures.length) {
+        return '';
+    }
+
+    return (
+        temperatures
+            .map(recipeIdNumber)
+            .join('_') +
+        'C'
+    );
+}
+
+
+function generatedAnnealingRecipeId() {
+    const instrument =
+        document.getElementById('annealingInstrument');
+
+    const atmosphere =
+        document.getElementById('annealingAtmosphere');
+
+    const rows = Array.from(
+        document.querySelectorAll(
+            '#annealingSteps .annealing-step-row'
+        )
+    );
+
+    const temperatures = [];
+    const durations = [];
+
+    rows.forEach(function(row) {
+        const temperature =
+            row.querySelector(
+                '.annealing-operation-temperature'
+            );
+
+        if (
+            temperature &&
+            temperature.value !== ''
+        ) {
+            const value = Number(temperature.value);
+
+            if (Number.isFinite(value)) {
+                temperatures.push(value);
+            }
+        }
+
+        const duration =
+            row.querySelector(
+                '.annealing-duration'
+            );
+
+        if (
+            duration &&
+            duration.value !== ''
+        ) {
+            const value = Number(duration.value);
+
+            if (Number.isFinite(value)) {
+                durations.push(value);
+            }
+        }
+    });
+
+    const parts = [
+        'Ann',
+        annealingInstrumentAbbreviation(
+            instrument ? instrument.value : ''
+        )
+    ];
+
+    const temperaturePart =
+        annealingTemperatureId(temperatures);
+
+    if (temperaturePart) {
+        parts.push(temperaturePart);
+    }
+
+    const durationPart =
+        cleaningDurationId(durations);
+
+    if (durationPart) {
+        parts.push(durationPart);
+    }
+
+    if (
+        atmosphere &&
+        atmosphere.value
+    ) {
+        parts.push(atmosphere.value);
+    }
+
+    return parts.join('_');
+}
+
+
 function updateGeneratedId() {
     try {
         document.getElementById('generatedIdValue').textContent = generatedId();
@@ -634,37 +1707,596 @@ function updateGeneratedId() {
     }
 }
 
-function clearHolderPositions() { document.getElementById('holderPositions').innerHTML = ''; }
+function clearHolderPositions() {
+    document.getElementById('holderPositions').innerHTML = '';
+    renderHolderPreview();
+}
+
+function holderNominalSizeMm() {
+    try {
+        const value = selectedSquareSize(
+            'holderSize',
+            'holderCustomSize'
+        );
+        return Number.isFinite(value) ? value : 10;
+    } catch (_) {
+        return 10;
+    }
+}
+
+
+function holderPositionSizeMm(position) {
+    const geometry =
+        position && position.slot_geometry
+            ? position.slot_geometry
+            : {};
+
+    const width = Number(geometry.width);
+
+    if (Number.isFinite(width) && width > 0) {
+        return width * 1000;
+    }
+
+    return holderNominalSizeMm();
+}
+
+
+function holderPreviewEscape(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+
+function installHolderGeometryUi() {
+    const header =
+        document.querySelector(
+            '.holder-position-header'
+        );
+
+    if (header) {
+        header.innerHTML =
+            '<div>Name</div>' +
+            '<div>Size (mm)</div>' +
+            '<div>Rho (mm)</div>' +
+            '<div>Theta (°)</div>' +
+            '<div></div>';
+
+        header.style.gridTemplateColumns =
+            '1fr 0.85fr 0.85fr 0.85fr auto';
+    }
+
+    const sizeLabel =
+        document.querySelector(
+            'label[for="holderSize"]'
+        );
+
+    if (sizeLabel) {
+        sizeLabel.textContent =
+            'Slot size';
+    }
+
+    const customSizeLabel =
+        document.querySelector(
+            'label[for="holderCustomSize"]'
+        );
+
+    if (customSizeLabel) {
+        customSizeLabel.textContent =
+            'Custom size (mm)';
+    }
+
+    ensureHolderPreview();
+
+    ['holderSize', 'holderCustomSize']
+        .forEach(function(id) {
+            const element =
+                document.getElementById(id);
+
+            if (
+                !element ||
+                element.dataset.holderPreviewHook === '1'
+            ) {
+                return;
+            }
+
+            element.dataset.holderPreviewHook =
+                '1';
+
+            function changed() {
+                syncHolderPositionSizes();
+                renderHolderPreview();
+            }
+
+            element.addEventListener(
+                'change',
+                changed
+            );
+
+            element.addEventListener(
+                'input',
+                changed
+            );
+        });
+}
+
+
+function ensureHolderPreview() {
+    let wrap =
+        document.getElementById(
+            'holderGeometryPreview'
+        );
+
+    if (wrap) {
+        return wrap;
+    }
+
+    const positions =
+        document.getElementById(
+            'holderPositions'
+        );
+
+    if (!positions) {
+        return null;
+    }
+
+    wrap =
+        document.createElement('div');
+
+    wrap.id =
+        'holderGeometryPreview';
+
+    wrap.style.marginTop =
+        '18px';
+
+    wrap.style.marginBottom =
+        '18px';
+
+    wrap.innerHTML =
+        '<h3 style="margin-bottom:8px;">Holder preview</h3>' +
+        '<p class="small" style="margin-top:0;">' +
+        'Live view from Size, Rho and Theta.' +
+        '</p>' +
+        '<div id="holderGeometryPreviewCanvas"></div>';
+
+    positions.insertAdjacentElement(
+        'afterend',
+        wrap
+    );
+
+    return wrap;
+}
+
+
+function syncHolderPositionSizes() {
+    const size =
+        holderNominalSizeMm();
+
+    document
+        .querySelectorAll(
+            '.holder-position-row .position-size'
+        )
+        .forEach(function(input) {
+            input.value =
+                String(size);
+        });
+}
+
+
+function renderHolderPreview() {
+    const wrap =
+        ensureHolderPreview();
+
+    if (!wrap) {
+        return;
+    }
+
+    const canvas =
+        document.getElementById(
+            'holderGeometryPreviewCanvas'
+        );
+
+    if (!canvas) {
+        return;
+    }
+
+    const rows =
+        Array.from(
+            document.querySelectorAll(
+                '.holder-position-row'
+            )
+        );
+
+    /*
+     * Standard PDI MBE holder:
+     * 3 inch diameter = 76.2 mm.
+     */
+    const holderRadius =
+        38.1;
+
+    const positions = [];
+
+    rows.forEach(function(row) {
+        const nameInput =
+            row.querySelector(
+                '.position-name'
+            );
+
+        const sizeInput =
+            row.querySelector(
+                '.position-size'
+            );
+
+        const rhoInput =
+            row.querySelector(
+                '.position-rho'
+            );
+
+        const thetaInput =
+            row.querySelector(
+                '.position-theta'
+            );
+
+        const name =
+            nameInput
+                ? nameInput.value.trim()
+                : '';
+
+        const size =
+            sizeInput
+                ? Number(sizeInput.value)
+                : NaN;
+
+        const rho =
+            rhoInput
+                ? Number(rhoInput.value)
+                : NaN;
+
+        const theta =
+            thetaInput
+                ? Number(thetaInput.value)
+                : NaN;
+
+        if (
+            !Number.isFinite(size) ||
+            !Number.isFinite(rho) ||
+            !Number.isFinite(theta)
+        ) {
+            return;
+        }
+
+        const rad =
+            theta *
+            Math.PI /
+            180;
+
+        positions.push({
+            name:
+                name ||
+                '?',
+
+            size:
+                size,
+
+            rho:
+                rho,
+
+            theta:
+                theta,
+
+            x:
+                rho *
+                Math.cos(rad),
+
+            y:
+                -rho *
+                Math.sin(rad)
+        });
+    });
+
+    let extent =
+        43;
+
+    positions.forEach(
+        function(position) {
+            extent =
+                Math.max(
+                    extent,
+                    Math.abs(position.x) +
+                        position.size /
+                        2 +
+                        5,
+                    Math.abs(position.y) +
+                        position.size /
+                        2 +
+                        5
+                );
+        }
+    );
+
+    const viewSize =
+        extent * 2;
+
+    let svg =
+        '<svg ' +
+        'viewBox="' +
+        (-extent) + ' ' +
+        (-extent) + ' ' +
+        viewSize + ' ' +
+        viewSize + '" ' +
+        'style="' +
+        'width:100%;' +
+        'max-width:420px;' +
+        'aspect-ratio:1;' +
+        'display:block;' +
+        'margin:0 auto;' +
+        'border:1px solid rgba(128,128,128,.35);' +
+        'border-radius:8px;' +
+        'background:transparent;' +
+        '">';
+
+    svg +=
+        '<circle ' +
+        'cx="0" cy="0" ' +
+        'r="' + holderRadius + '" ' +
+        'fill="none" ' +
+        'stroke="currentColor" ' +
+        'stroke-width="0.7" ' +
+        'opacity="0.65" />';
+
+    svg +=
+        '<line ' +
+        'x1="' + (-holderRadius) + '" ' +
+        'y1="0" ' +
+        'x2="' + holderRadius + '" ' +
+        'y2="0" ' +
+        'stroke="currentColor" ' +
+        'stroke-width="0.25" ' +
+        'opacity="0.25" />';
+
+    svg +=
+        '<line ' +
+        'x1="0" ' +
+        'y1="' + (-holderRadius) + '" ' +
+        'x2="0" ' +
+        'y2="' + holderRadius + '" ' +
+        'stroke="currentColor" ' +
+        'stroke-width="0.25" ' +
+        'opacity="0.25" />';
+
+    positions.forEach(
+        function(position) {
+            /*
+             * SVG y points downwards.
+             * Positive mathematical y therefore
+             * becomes negative SVG y.
+             */
+            const x =
+                position.x;
+
+            const y =
+                -position.y;
+
+            const half =
+                position.size /
+                2;
+
+            svg +=
+                '<rect ' +
+                'x="' + (x - half) + '" ' +
+                'y="' + (y - half) + '" ' +
+                'width="' + position.size + '" ' +
+                'height="' + position.size + '" ' +
+                'rx="0.7" ' +
+                'fill="none" ' +
+                'stroke="currentColor" ' +
+                'stroke-width="0.8" />';
+
+            svg +=
+                '<text ' +
+                'x="' + x + '" ' +
+                'y="' + (y + 1.7) + '" ' +
+                'text-anchor="middle" ' +
+                'font-size="4.5" ' +
+                'font-family="sans-serif" ' +
+                'fill="currentColor">' +
+                holderPreviewEscape(
+                    position.name
+                ) +
+                '</text>';
+        }
+    );
+
+    svg +=
+        '<text ' +
+        'x="0" ' +
+        'y="' + (holderRadius + 4.5) + '" ' +
+        'text-anchor="middle" ' +
+        'font-size="3.6" ' +
+        'font-family="sans-serif" ' +
+        'fill="currentColor" ' +
+        'opacity="0.65">' +
+        '3-inch holder · 76.2 mm' +
+        '</text>';
+
+    svg +=
+        '</svg>';
+
+    canvas.innerHTML =
+        svg;
+}
+
 
 function addHolderPosition(position) {
-    position = position || {};
-    const row = document.createElement('div');
-    row.className = 'holder-position-row';
+    position =
+        position || {};
 
-    function input(className, value, type, step) {
-        const element = document.createElement('input');
-        element.className = className;
-        element.type = type || 'number';
-        if (step) element.step = step;
-        element.value = value === undefined || value === null ? '' : String(value);
+    const row =
+        document.createElement(
+            'div'
+        );
+
+    row.className =
+        'holder-position-row';
+
+    row.style.gridTemplateColumns =
+        '1fr 0.85fr 0.85fr 0.85fr auto';
+
+    function input(
+        className,
+        value,
+        type,
+        step
+    ) {
+        const element =
+            document.createElement(
+                'input'
+            );
+
+        element.className =
+            className;
+
+        element.type =
+            type || 'number';
+
+        if (step) {
+            element.step =
+                step;
+        }
+
+        element.value =
+            value === undefined ||
+            value === null
+                ? ''
+                : String(value);
+
+        element.addEventListener(
+            'input',
+            renderHolderPreview
+        );
+
+        element.addEventListener(
+            'change',
+            renderHolderPreview
+        );
+
         return element;
     }
 
+    const nameInput =
+        input(
+            'position-name',
+            position.name || '',
+            'text'
+        );
+
+    const sizeInput =
+        input(
+            'position-size',
+            holderPositionSizeMm(
+                position
+            ),
+            'number',
+            '0.1'
+        );
+
+    /*
+     * Size is selected once for the holder
+     * and shown per position for clarity.
+     */
+    sizeInput.readOnly =
+        true;
+
+    sizeInput.title =
+        'Slot size is set by the holder Size field above.';
+
+    const rhoInput =
+        input(
+            'position-rho',
+            mm(position.rho),
+            'number',
+            '0.1'
+        );
+
+    rhoInput.min =
+        '0';
+
+    const thetaInput =
+        input(
+            'position-theta',
+            geometryNumber(
+                position.theta
+            ),
+            'number',
+            '0.1'
+        );
+
     row.append(
-        input('position-name', position.name || '', 'text'),
-        input('position-x', mm(position.x_position), 'number', '0.01'),
-        input('position-y', mm(position.y_position), 'number', '0.01'),
-        input('position-rho', mm(position.rho), 'number', '0.01'),
-        input('position-theta', geometryNumber(position.theta), 'number', '0.1')
+        nameInput,
+        sizeInput,
+        rhoInput,
+        thetaInput
     );
 
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'remove-position';
-    remove.textContent = '×';
-    remove.addEventListener('click', function() { row.remove(); });
-    row.appendChild(remove);
-    document.getElementById('holderPositions').appendChild(row);
+    const remove =
+        document.createElement(
+            'button'
+        );
+
+    remove.type =
+        'button';
+
+    remove.className =
+        'remove-position';
+
+    remove.textContent =
+        '×';
+
+    remove.title =
+        'Remove position';
+
+    remove.addEventListener(
+        'click',
+        function() {
+            row.remove();
+            renderHolderPreview();
+        }
+    );
+
+    row.appendChild(
+        remove
+    );
+
+    document
+        .getElementById(
+            'holderPositions'
+        )
+        .appendChild(
+            row
+        );
+
+    installHolderGeometryUi();
+    renderHolderPreview();
+}
+
+
+if (
+    document.readyState ===
+    'loading'
+) {
+    document.addEventListener(
+        'DOMContentLoaded',
+        function() {
+            installHolderGeometryUi();
+            renderHolderPreview();
+        }
+    );
+} else {
+    installHolderGeometryUi();
+    renderHolderPreview();
 }
 
 function fieldValuesFromCatalog(field) {
@@ -698,8 +2330,837 @@ function friendlyFieldLabel(field) {
     return labels[field] || field.replaceAll('_', ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
 }
 
+
+function cleaningReagentName(step) {
+    const reagent = step && step.cleaning_reagents;
+    if (!reagent) return '';
+    if (Array.isArray(reagent)) return reagent[0] && reagent[0].name ? reagent[0].name : '';
+    return reagent.name || '';
+}
+
+function cleaningStepHtml(step, index) {
+    step = step || {};
+    const reagent = cleaningReagentName(step);
+    const durationMin = step.duration != null ? Number(step.duration) / 60 : '';
+    const temperature = step.temperature != null ? step.temperature : '';
+    const agitation = step.agitation || '';
+    const comment = step.comment || '';
+
+    const knownReagents = [
+        'Isobutyl alcohol',
+        'Acetone',
+        'Isopropanol',
+        'DI water',
+        'HF',
+        "King's water"
+    ];
+
+    const customReagent = reagent && !knownReagents.includes(reagent);
+
+    return `
+        <div class="cleaning-step-row">
+            <div class="cleaning-step-header">
+                <strong>Step ${index + 1}</strong>
+                <button type="button" class="cleaning-remove-step">Remove step</button>
+            </div>
+
+            <div class="cleaning-step-primary">
+                <div>
+                    <label>Reagent / medium *</label>
+                    <select class="cleaning-reagent" required>
+                        <option value="">Select...</option>
+                        <option value="Isobutyl alcohol" ${reagent === 'Isobutyl alcohol' ? 'selected' : ''}>Isobutyl alcohol</option>
+                        <option value="Acetone" ${reagent === 'Acetone' ? 'selected' : ''}>Acetone</option>
+                        <option value="Isopropanol" ${reagent === 'Isopropanol' ? 'selected' : ''}>Isopropanol</option>
+                        <option value="DI water" ${reagent === 'DI water' ? 'selected' : ''}>DI water</option>
+                        <option value="HF" ${reagent === 'HF' ? 'selected' : ''}>HF</option>
+                        <option value="__custom__" ${customReagent ? 'selected' : ''}>Custom...</option>
+                    </select>
+
+                    <input
+                        class="cleaning-reagent-custom ${customReagent ? '' : 'hidden'}"
+                        type="text"
+                        placeholder="Custom reagent"
+                        value="${customReagent ? escapeHtml(reagent) : ''}">
+                </div>
+
+                <div>
+                    <label>Duration (min) *</label>
+                    <input
+                        class="cleaning-duration"
+                        type="number"
+                        required
+                        step="0.1"
+                        min="0"
+                        value="${durationMin}">
+                </div>
+
+                <div>
+                    <label>Temperature (°C) *</label>
+                    <input
+                        class="cleaning-temperature"
+                        type="number"
+                        required
+                        step="0.1"
+                        value="${temperature}">
+                </div>
+            </div>
+
+            <div class="cleaning-step-secondary">
+                <div>
+                    <label>Agitation *</label>
+                    <select class="cleaning-agitation" required>
+                        <option value="__none__" ${!agitation ? 'selected' : ''}>None</option>
+                        <option value="Hot plate" ${agitation === 'Hot plate' ? 'selected' : ''}>Hot plate</option>
+                        <option value="Ultrasonic bath" ${agitation === 'Ultrasonic bath' ? 'selected' : ''}>Ultrasonic bath</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Comment</label>
+                    <input
+                        class="cleaning-comment"
+                        type="text"
+                        value="${escapeHtml(comment)}">
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function restoreProcessingTemplateBlock() {
+    const block = document.getElementById('processingTemplateBlock');
+    const fields = document.getElementById('processingFields');
+    const dynamic = document.getElementById('processingDynamicFields');
+
+    if (block && fields && dynamic && block.parentElement !== fields) {
+        fields.insertBefore(block, dynamic);
+    }
+}
+
+function restoreTargetUploadFields() {
+    const target = document.getElementById('targetUploadFields');
+    const actions = document.querySelector('.modal-actions');
+    if (target && actions && target.parentElement !== actions.parentElement) {
+        actions.parentElement.insertBefore(target, actions);
+    }
+}
+
+function renderCleaningFields(seedData) {
+    restoreProcessingTemplateBlock();
+
+    const container = document.getElementById('processingDynamicFields');
+
+    if (container.dataset.cleaningIdHook !== '1') {
+        container.dataset.cleaningIdHook = '1';
+
+        container.addEventListener(
+            'input',
+            updateGeneratedId
+        );
+
+        container.addEventListener(
+            'change',
+            updateGeneratedId
+        );
+
+        const cleaningIdObserver =
+            new MutationObserver(
+                function() {
+                    updateGeneratedId();
+                }
+            );
+
+        cleaningIdObserver.observe(
+            container,
+            {
+                childList: true,
+                subtree: true
+            }
+        );
+    }
+
+    const method = String((seedData || {}).method || '');
+    const acid = /acid|hf/i.test(method);
+
+    container.classList.add('cleaning-editor');
+
+    container.innerHTML = `
+        <div class="cleaning-left-column">
+            <div>
+                <label for="chemicalTreatmentType">Treatment type</label>
+                <select id="chemicalTreatmentType">
+                    <option value="Solvent cleaning" ${acid ? '' : 'selected'}>Solvent cleaning</option>
+                    <option value="Acid treatment" ${acid ? 'selected' : ''}>Acid / HF treatment</option>
+                </select>
+            </div>
+
+            <div>
+                <label for="chemicalTreatmentName">Recipe name</label>
+                <input
+                    id="chemicalTreatmentName"
+                    type="text"
+                    required
+                    placeholder="e.g. Iso-Ace-Prop_10_US"
+                    value="${escapeHtml(
+                        (seedData || {}).name &&
+                        (seedData || {}).name !== (seedData || {}).lab_id
+                            ? (seedData || {}).name
+                            : ''
+                    )}">
+            </div>
+
+            <div>
+                <label for="chemicalTreatmentDescription">Description</label>
+                <input
+                    id="chemicalTreatmentDescription"
+                    type="text"
+                    value="${escapeHtml((seedData || {}).description || '')}">
+            </div>
+        </div>
+
+        <div class="cleaning-right-column">
+            <div class="cleaning-steps-heading">
+                <h3>Process steps</h3>
+            </div>
+
+            <div id="cleaningSteps"></div>
+            <button type="button" id="addCleaningStep">+ Add step</button>
+        </div>
+    `;
+
+    const cleaningLeft = container.querySelector('.cleaning-left-column');
+
+    const templateBlock = document.getElementById('processingTemplateBlock');
+    if (cleaningLeft && templateBlock) {
+        cleaningLeft.insertBefore(templateBlock, cleaningLeft.firstChild);
+    }
+
+    const targetUpload = document.getElementById('targetUploadFields');
+    if (cleaningLeft && targetUpload) {
+        cleaningLeft.appendChild(targetUpload);
+    }
+
+    const recipeNameInput = document.getElementById('chemicalTreatmentName');
+    if (recipeNameInput) {
+        recipeNameInput.addEventListener('input', updateGeneratedId);
+    }
+    updateGeneratedId();
+
+    const steps = Array.isArray(seedData.steps) && seedData.steps.length
+        ? seedData.steps
+        : [{}];
+
+    const stepContainer = document.getElementById('cleaningSteps');
+
+    function syncCleaningStepsFromDom() {
+        const rows = Array.from(stepContainer.querySelectorAll('.cleaning-step-row'));
+
+        rows.forEach(function(row, index) {
+            const reagentSelect = row.querySelector('.cleaning-reagent');
+            const reagentCustom = row.querySelector('.cleaning-reagent-custom');
+
+            const reagent = reagentSelect.value === '__custom__'
+                ? reagentCustom.value.trim()
+                : reagentSelect.value;
+
+            const durationRaw = row.querySelector('.cleaning-duration').value.trim();
+            const temperatureRaw = row.querySelector('.cleaning-temperature').value.trim();
+            const agitation = row.querySelector('.cleaning-agitation').value;
+            const comment = row.querySelector('.cleaning-comment').value.trim();
+
+            const step = {};
+
+            if (reagent) {
+                step.name = reagent;
+                step.cleaning_reagents = {name: reagent};
+            }
+
+            if (durationRaw !== '') {
+                step.duration = Number(durationRaw) * 60;
+            }
+
+            if (temperatureRaw !== '') {
+                step.temperature = Number(temperatureRaw);
+            }
+
+            if (agitation && agitation !== '__none__') {
+                step.agitation = agitation;
+            }
+            if (comment) step.comment = comment;
+
+            steps[index] = step;
+        });
+    }
+
+    function redraw() {
+        stepContainer.innerHTML = steps.map(cleaningStepHtml).join('');
+
+        stepContainer.querySelectorAll('.cleaning-reagent').forEach(function(select) {
+            select.addEventListener('change', function() {
+                const custom =
+                    select.parentElement.querySelector('.cleaning-reagent-custom');
+                custom.classList.toggle('hidden', select.value !== '__custom__');
+            });
+        });
+
+        stepContainer.querySelectorAll('.cleaning-remove-step').forEach(function(button, index) {
+            button.disabled = steps.length === 1;
+
+            button.addEventListener('click', function() {
+                syncCleaningStepsFromDom();
+                steps.splice(index, 1);
+                redraw();
+            });
+        });
+    }
+
+    document.getElementById('addCleaningStep').addEventListener('click', function() {
+        syncCleaningStepsFromDom();
+        steps.push({});
+        redraw();
+    });
+
+    redraw();
+}
+
+
+function annealingInstrumentName(seedData) {
+    const instruments = (seedData || {}).instruments;
+    if (Array.isArray(instruments) && instruments.length && instruments[0].name) {
+        return String(instruments[0].name);
+    }
+    return 'Tube furnace – MBE lab';
+}
+
+function annealingStepHtml(step, index) {
+    step = step || {};
+
+    const durationMin =
+        step.duration != null ? Number(step.duration) / 60 : '';
+
+    const operationTemperature =
+        step.operation_temperature != null
+            ? step.operation_temperature
+            : (
+                step.ending_temperature != null
+                    ? step.ending_temperature
+                    : (
+                        step.starting_temperature != null
+                            ? step.starting_temperature
+                            : ''
+                    )
+            );
+
+    // Stored internally as K/s. Display existing values as °C/min.
+    const rampRate =
+        step.ramp_rate != null ? Number(step.ramp_rate) * 60 : '';
+
+    const comment = step.comment || '';
+
+    return `
+        <div class="annealing-step-row">
+            <div class="annealing-step-header">
+                <strong>Step ${index + 1}</strong>
+                <button type="button" class="annealing-remove-step">Remove step</button>
+            </div>
+
+            <div class="annealing-step-primary">
+                <div>
+                    <label>Operation temperature (°C) *</label>
+                    <input
+                        class="annealing-operation-temperature"
+                        type="number"
+                        step="0.1"
+                        required
+                        value="${operationTemperature}">
+                </div>
+
+                <div>
+                    <label>Duration (min) *</label>
+                    <input
+                        class="annealing-duration"
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        required
+                        value="${durationMin}">
+                </div>
+
+                <div>
+                    <label>Ramp rate</label>
+                    <div class="annealing-ramp-control">
+                        <input
+                            class="annealing-ramp-rate"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            value="${rampRate}">
+                        <select class="annealing-ramp-unit">
+                            <option value="c_per_min" selected>°C/min</option>
+                            <option value="c_per_s">°C/s</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="annealing-step-secondary">
+                <div>
+                    <label>Comment</label>
+                    <input
+                        class="annealing-comment"
+                        type="text"
+                        value="${escapeHtml(comment)}">
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderAnnealingFields(seedData) {
+    restoreProcessingTemplateBlock();
+
+    const container = document.getElementById('processingDynamicFields');
+    container.classList.remove('cleaning-editor');
+    container.classList.add('annealing-editor');
+
+    const instrument = annealingInstrumentName(seedData);
+    const atmosphere = String((seedData || {}).atmosphere || 'Vacuum');
+    const gasFlow =
+        (seedData || {}).gas_flow_sccm != null
+            ? (seedData || {}).gas_flow_sccm
+            : '';
+    const rfPower =
+        (seedData || {}).rf_power_w != null
+            ? (seedData || {}).rf_power_w
+            : '';
+
+    container.innerHTML = `
+        <div class="annealing-left-column">
+            <div>
+                <label for="annealingRecipeName">Recipe name</label>
+                <input
+                    id="annealingRecipeName"
+                    type="text"
+                    required
+                    placeholder="e.g. STO_O2_950C"
+                    value="${escapeHtml(
+                        (seedData || {}).name &&
+                        (seedData || {}).name !== (seedData || {}).lab_id
+                            ? (seedData || {}).name
+                            : ''
+                    )}">
+            </div>
+
+            <div>
+                <label for="annealingDescription">Description</label>
+                <input
+                    id="annealingDescription"
+                    type="text"
+                    value="${escapeHtml((seedData || {}).description || '')}">
+            </div>
+        </div>
+
+        <div class="annealing-right-column">
+            <div class="annealing-condition-grid">
+                <div>
+                    <label for="annealingInstrument">Instrument / location *</label>
+                    <select id="annealingInstrument" required>
+                        <option ${instrument === 'Tube furnace – MBE lab' ? 'selected' : ''}>Tube furnace – MBE lab</option>
+                        <option ${instrument === 'Tube furnace – 6th floor' ? 'selected' : ''}>Tube furnace – 6th floor</option>
+                        <option ${instrument === 'Oven Chemlab' ? 'selected' : ''}>Oven Chemlab</option>
+                        <option ${instrument === 'Rapid Thermal Annealing' ? 'selected' : ''}>Rapid Thermal Annealing</option>
+                        <option ${instrument === 'MBE growth chamber' ? 'selected' : ''}>MBE growth chamber</option>
+                        <option ${instrument === 'MBE 2nd transfer chamber' ? 'selected' : ''}>MBE 2nd transfer chamber</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="annealingAtmosphere">Gas / atmosphere *</label>
+                    <select id="annealingAtmosphere" required>
+                        <option value="Vacuum" ${atmosphere === 'Vacuum' ? 'selected' : ''}>Vacuum</option>
+                        <option value="O2" ${atmosphere === 'O2' ? 'selected' : ''}>O₂</option>
+                        <option value="Ar" ${atmosphere === 'Ar' ? 'selected' : ''}>Ar</option>
+                        <option value="N2" ${atmosphere === 'N2' ? 'selected' : ''}>N₂</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="annealingGasFlow">Gas flow (sccm)</label>
+                    <input
+                        id="annealingGasFlow"
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value="${gasFlow}">
+                </div>
+
+                <div id="annealingRfPowerWrap">
+                    <label for="annealingRfPower">RF power (W)</label>
+                    <input
+                        id="annealingRfPower"
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value="${rfPower}">
+                </div>
+            </div>
+
+            <div class="annealing-steps-heading">
+                <h3>Process steps</h3>
+            </div>
+
+            <div id="annealingSteps"></div>
+            <button type="button" id="addAnnealingStep">+ Add step</button>
+        </div>
+    `;
+
+    const left = container.querySelector('.annealing-left-column');
+
+    const templateBlock = document.getElementById('processingTemplateBlock');
+    if (left && templateBlock) {
+        left.insertBefore(templateBlock, left.firstChild);
+    }
+
+    const targetUpload = document.getElementById('targetUploadFields');
+    if (left && targetUpload) {
+        left.appendChild(targetUpload);
+    }
+
+    const nameInput = document.getElementById('annealingRecipeName');
+    if (nameInput) {
+        nameInput.addEventListener('input', updateGeneratedId);
+    }
+
+    const instrumentSelect = document.getElementById('annealingInstrument');
+    const atmosphereSelect = document.getElementById('annealingAtmosphere');
+    const gasFlowInput = document.getElementById('annealingGasFlow');
+    const rfWrap = document.getElementById('annealingRfPowerWrap');
+
+    function updateAnnealingConditions() {
+        const currentAtmosphere = atmosphereSelect.value;
+        const instrument = instrumentSelect.value;
+
+        let allowedAtmospheres;
+        let fallbackAtmosphere = 'Vacuum';
+
+        if (instrument === 'Oven Chemlab') {
+            allowedAtmospheres = [
+                ['Air', 'Air']
+            ];
+            fallbackAtmosphere = 'Air';
+        } else if (
+            instrument === 'Rapid Thermal Annealing'
+        ) {
+            allowedAtmospheres = [
+                ['N2', 'N₂'],
+                ['O2', 'O₂'],
+                ['Ar', 'Ar'],
+                ['Air', 'Air']
+            ];
+            fallbackAtmosphere = 'Air';
+        } else if (
+            instrument === 'Tube furnace – MBE lab' ||
+            instrument === 'Tube furnace – 6th floor'
+        ) {
+            allowedAtmospheres = [
+                ['Vacuum', 'Vacuum'],
+                ['O2', 'O₂'],
+                ['Ar', 'Ar'],
+                ['N2', 'N₂'],
+                ['Air', 'Air']
+            ];
+        } else {
+            allowedAtmospheres = [
+                ['Vacuum', 'Vacuum'],
+                ['O2', 'O₂'],
+                ['Ar', 'Ar']
+            ];
+        }
+
+        atmosphereSelect.innerHTML = '';
+
+        allowedAtmospheres.forEach(function(pair) {
+            const option =
+                document.createElement('option');
+
+            option.value = pair[0];
+            option.textContent = pair[1];
+
+            atmosphereSelect.appendChild(option);
+        });
+
+        if (
+            allowedAtmospheres.some(
+                function(pair) {
+                    return pair[0] ===
+                           currentAtmosphere;
+                }
+            )
+        ) {
+            atmosphereSelect.value =
+                currentAtmosphere;
+        } else {
+            atmosphereSelect.value =
+                fallbackAtmosphere;
+        }
+
+        atmosphereSelect.disabled =
+            instrument === 'Oven Chemlab';
+
+        const hasRfPlasma =
+            instrument === 'MBE growth chamber';
+
+        rfWrap.classList.toggle(
+            'hidden',
+            !hasRfPlasma
+        );
+
+        if (!hasRfPlasma) {
+            document
+                .getElementById('annealingRfPower')
+                .value = '';
+        }
+
+        /*
+         * Vacuum and ambient air do not require
+         * a gas-flow value.
+         */
+        const needsGasFlow =
+            atmosphereSelect.value !== 'Vacuum' &&
+            atmosphereSelect.value !== 'Air';
+
+        gasFlowInput.disabled = !needsGasFlow;
+        gasFlowInput.required = needsGasFlow;
+
+        if (!needsGasFlow) {
+            gasFlowInput.value = '';
+        }
+    }
+
+
+    instrumentSelect.addEventListener('change', function() {
+        updateAnnealingConditions();
+        updateGeneratedId();
+    });
+    atmosphereSelect.addEventListener('change', function() {
+        updateAnnealingConditions();
+        updateGeneratedId();
+    });
+    updateAnnealingConditions();
+
+    const steps =
+        Array.isArray(seedData.steps) && seedData.steps.length
+            ? seedData.steps
+            : [{}];
+
+    const stepContainer = document.getElementById('annealingSteps');
+
+    if (container.dataset.annealingIdHook !== '1') {
+        container.dataset.annealingIdHook = '1';
+
+        container.addEventListener(
+            'input',
+            updateGeneratedId
+        );
+
+        container.addEventListener(
+            'change',
+            updateGeneratedId
+        );
+    }
+
+    function syncAnnealingStepsFromDom() {
+        const rows =
+            Array.from(stepContainer.querySelectorAll('.annealing-step-row'));
+
+        rows.forEach(function(row, index) {
+            const operationTemperature =
+                row.querySelector('.annealing-operation-temperature').value.trim();
+
+            const duration =
+                row.querySelector('.annealing-duration').value.trim();
+
+            const rampRate =
+                row.querySelector('.annealing-ramp-rate').value.trim();
+
+            const rampUnit =
+                row.querySelector('.annealing-ramp-unit').value;
+
+            const comment =
+                row.querySelector('.annealing-comment').value.trim();
+
+            const step = {};
+
+            if (operationTemperature !== '') {
+                step.operation_temperature = Number(operationTemperature);
+            }
+
+            if (duration !== '') {
+                step.duration = Number(duration) * 60;
+            }
+
+            if (rampRate !== '') {
+                const value = Number(rampRate);
+
+                // Internal schema unit: K/s
+                step.ramp_rate =
+                    rampUnit === 'c_per_min'
+                        ? value / 60
+                        : value;
+            }
+
+            if (comment) step.comment = comment;
+
+            steps[index] = step;
+        });
+    }
+
+    function redraw() {
+        stepContainer.innerHTML =
+            steps.map(annealingStepHtml).join('');
+
+        updateGeneratedId();
+
+        stepContainer
+            .querySelectorAll('.annealing-remove-step')
+            .forEach(function(button, index) {
+                button.disabled = steps.length === 1;
+
+                button.addEventListener('click', function() {
+                    syncAnnealingStepsFromDom();
+                    steps.splice(index, 1);
+                    redraw();
+                });
+            });
+    }
+
+    document
+        .getElementById('addAnnealingStep')
+        .addEventListener('click', function() {
+            syncAnnealingStepsFromDom();
+            steps.push({});
+            redraw();
+        });
+
+    redraw();
+    updateGeneratedId();
+}
+
+function renderBackSideCoatingFields(seedData) {
+    restoreProcessingTemplateBlock();
+
+    const container =
+        document.getElementById('processingDynamicFields');
+
+    container.classList.remove(
+        'cleaning-editor',
+        'annealing-editor'
+    );
+
+    const material =
+        (seedData || {}).coating_material ||
+        (
+            (seedData || {}).coating_reagents &&
+            (seedData || {}).coating_reagents.name
+        ) ||
+        'Ti';
+
+    const thicknessUm =
+        (seedData || {}).thickness !== undefined &&
+        (seedData || {}).thickness !== null
+            ? Number((seedData || {}).thickness) * 1e6
+            : '';
+
+    container.innerHTML = `
+        <div class="cleaning-left-column">
+            <div>
+                <label for="backCoatingMaterial">
+                    Coating material
+                </label>
+
+                <select id="backCoatingMaterial">
+                    <option
+                        value="Ti"
+                        ${material === 'Ti' ? 'selected' : ''}>
+                        Ti
+                    </option>
+
+                    <option
+                        value="SrRuO3"
+                        ${material === 'SrRuO3' ? 'selected' : ''}>
+                        SrRuO3
+                    </option>
+                </select>
+            </div>
+
+            <div>
+                <label for="backCoatingThickness">
+                    Thickness (µm)
+                </label>
+
+                <input
+                    id="backCoatingThickness"
+                    type="number"
+                    min="0"
+                    step="any"
+                    required
+                    value="${escapeHtml(thicknessUm)}">
+            </div>
+        </div>
+    `;
+
+    const left =
+        container.querySelector('.cleaning-left-column');
+
+    const templateBlock =
+        document.getElementById('processingTemplateBlock');
+
+    if (left && templateBlock) {
+        left.insertBefore(
+            templateBlock,
+            left.firstChild
+        );
+    }
+
+    const target =
+        document.getElementById('targetUploadFields');
+
+    if (left && target) {
+        left.appendChild(target);
+    }
+
+    document
+        .getElementById('backCoatingMaterial')
+        .addEventListener('change', updateGeneratedId);
+
+    document
+        .getElementById('backCoatingThickness')
+        .addEventListener('input', updateGeneratedId);
+
+    updateGeneratedId();
+}
+
+
 function renderProcessingDynamicFields(seedData) {
     const container = document.getElementById('processingDynamicFields');
+    container.classList.remove('cleaning-editor', 'annealing-editor');
+
+    if (currentSubtype === 'cleaning') {
+        renderCleaningFields(seedData || {});
+        return;
+    }
+
+    if (currentSubtype === 'annealing') {
+        renderAnnealingFields(seedData || {});
+        return;
+    }
+
+    if (currentSubtype === 'back_side_coating') {
+        renderBackSideCoatingFields(seedData || {});
+        return;
+    }
+
     container.innerHTML = '';
     const fields = dynamicScalarFields();
     if (!fields.length) {
@@ -785,6 +3246,8 @@ function populateProcessingTemplate(seedData) {
 }
 
 function populateEditor(data) {
+    restoreTargetUploadFields();
+    restoreProcessingTemplateBlock();
     data = data || {};
     ['processingFields','sampleCutFields','holderFields','insertFields'].forEach(function(id) {
         document.getElementById(id).classList.add('hidden');
@@ -818,7 +3281,6 @@ function populateEditor(data) {
         if (!positions.length) {
             ['A','B','C','D','E'].forEach(function(name) { addHolderPosition({name:name}); });
         }
-        document.getElementById('holderTags').value = Array.isArray(data.tags) ? data.tags.join(', ') : '';
     }
 
     if (currentType === 'insert') {
@@ -834,7 +3296,6 @@ function populateEditor(data) {
         const inner = geometryXY(data.inner_geometry);
         setSizeSelect('insertOuterSize','insertOuterCustomWrap','insertOuterCustom',outer ? outer.width * 1000 : 10);
         setSizeSelect('insertInnerSize','insertInnerCustomWrap','insertInnerCustom',inner ? inner.width * 1000 : 5);
-        document.getElementById('insertTags').value = Array.isArray(data.tags) ? data.tags.join(', ') : '';
     }
 
     updateGeneratedId();
@@ -940,6 +3401,331 @@ function readDynamicFields(data) {
     });
 }
 
+
+function readCleaningFields(data) {
+    const recipeName =
+        document.getElementById('chemicalTreatmentName').value.trim();
+
+    if (!recipeName) {
+        throw new Error('Recipe name is required.');
+    }
+
+    data.name = recipeName;
+    data.method = document.getElementById('chemicalTreatmentType').value;
+
+    const description =
+        document.getElementById('chemicalTreatmentDescription').value.trim();
+
+    if (description) data.description = description;
+    else delete data.description;
+
+    const rows =
+        Array.from(document.querySelectorAll('.cleaning-step-row'));
+
+    if (!rows.length) {
+        throw new Error(
+            'Chemical treatment requires at least one process step.'
+        );
+    }
+
+    let totalDuration = 0;
+
+    data.steps = rows.map(function(row, index) {
+        const number = index + 1;
+
+        const reagentSelect =
+            row.querySelector('.cleaning-reagent');
+
+        const reagentCustom =
+            row.querySelector('.cleaning-reagent-custom');
+
+        const reagent =
+            reagentSelect.value === '__custom__'
+                ? reagentCustom.value.trim()
+                : reagentSelect.value;
+
+        if (!reagent) {
+            throw new Error(
+                'Step ' + number + ': reagent / medium is required.'
+            );
+        }
+
+        const durationMinutes =
+            Number(row.querySelector('.cleaning-duration').value);
+
+        if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+            throw new Error(
+                'Step ' + number +
+                ': duration must be greater than zero.'
+            );
+        }
+
+        const temperature =
+            Number(row.querySelector('.cleaning-temperature').value);
+
+        if (!Number.isFinite(temperature)) {
+            throw new Error(
+                'Step ' + number + ': temperature is required.'
+            );
+        }
+
+        const agitation =
+            row.querySelector('.cleaning-agitation').value;
+
+        if (!agitation) {
+            throw new Error(
+                'Step ' + number + ': select an agitation setting.'
+            );
+        }
+
+        const durationSeconds = durationMinutes * 60;
+        totalDuration += durationSeconds;
+
+        const step = {
+            name: reagent,
+            duration: durationSeconds,
+            temperature: temperature,
+            cleaning_reagents: {
+                name: reagent
+            }
+        };
+
+        if (agitation !== '__none__') {
+            step.agitation = agitation;
+        }
+
+        const comment =
+            row.querySelector('.cleaning-comment').value.trim();
+
+        if (comment) step.comment = comment;
+
+        return step;
+    });
+
+    data.duration = totalDuration;
+}
+
+
+function readAnnealingFields(data) {
+    const recipeName =
+        document.getElementById('annealingRecipeName').value.trim();
+
+    if (!recipeName) {
+        throw new Error('Recipe name is required.');
+    }
+
+    data.name = recipeName;
+
+    const description =
+        document.getElementById('annealingDescription').value.trim();
+
+    if (description) data.description = description;
+    else delete data.description;
+
+    const instrument =
+        document.getElementById('annealingInstrument').value;
+
+    if (!instrument) {
+        throw new Error('Annealing instrument / location is required.');
+    }
+
+    // Keep both the human-readable location and the NOMAD
+    // InstrumentReference structure.
+    data.location = instrument;
+    data.instruments = [{
+        name: instrument
+    }];
+
+    const atmosphere =
+        document.getElementById('annealingAtmosphere').value;
+
+    if (!atmosphere) {
+        throw new Error('Gas / atmosphere is required.');
+    }
+
+    data.atmosphere = atmosphere;
+
+    const gasFlowInput =
+        document.getElementById('annealingGasFlow');
+
+    if (
+        atmosphere === 'Vacuum' ||
+        atmosphere === 'Air'
+    ) {
+        delete data.gas_flow_sccm;
+    } else {
+        const gasFlow = Number(gasFlowInput.value);
+
+        if (!Number.isFinite(gasFlow) || gasFlow <= 0) {
+            throw new Error(
+                'Gas flow must be greater than zero for ' +
+                atmosphere + '.'
+            );
+        }
+
+        data.gas_flow_sccm = gasFlow;
+    }
+
+    const rfInput =
+        document.getElementById('annealingRfPower');
+
+    if (instrument === 'MBE growth chamber') {
+        const rawRf = rfInput.value.trim();
+
+        if (rawRf === '') {
+            delete data.rf_power_w;
+        } else {
+            const rfPower = Number(rawRf);
+
+            if (!Number.isFinite(rfPower) || rfPower < 0) {
+                throw new Error(
+                    'RF power must be zero or greater.'
+                );
+            }
+
+            data.rf_power_w = rfPower;
+        }
+    } else {
+        delete data.rf_power_w;
+    }
+
+    const rows =
+        Array.from(document.querySelectorAll('.annealing-step-row'));
+
+    if (!rows.length) {
+        throw new Error(
+            'Annealing requires at least one process step.'
+        );
+    }
+
+    let totalDuration = 0;
+
+    data.steps = rows.map(function(row, index) {
+        const number = index + 1;
+
+        const temperature =
+            Number(
+                row.querySelector(
+                    '.annealing-operation-temperature'
+                ).value
+            );
+
+        if (!Number.isFinite(temperature)) {
+            throw new Error(
+                'Step ' + number +
+                ': operation temperature is required.'
+            );
+        }
+
+        const durationMinutes =
+            Number(row.querySelector('.annealing-duration').value);
+
+        if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+            throw new Error(
+                'Step ' + number +
+                ': duration must be greater than zero.'
+            );
+        }
+
+        const durationSeconds = durationMinutes * 60;
+        totalDuration += durationSeconds;
+
+        const step = {
+            name: 'Step ' + number,
+            operation_temperature: temperature,
+            duration: durationSeconds
+        };
+
+        const rampRaw =
+            row.querySelector('.annealing-ramp-rate').value.trim();
+
+        if (rampRaw !== '') {
+            const ramp = Number(rampRaw);
+
+            if (!Number.isFinite(ramp) || ramp < 0) {
+                throw new Error(
+                    'Step ' + number +
+                    ': ramp rate must be zero or greater.'
+                );
+            }
+
+            const unit =
+                row.querySelector('.annealing-ramp-unit').value;
+
+            // NOMAD storage unit: K/s.
+            // A temperature difference of 1 °C equals 1 K.
+            step.ramp_rate =
+                unit === 'c_per_min'
+                    ? ramp / 60
+                    : ramp;
+        }
+
+        const comment =
+            row.querySelector('.annealing-comment').value.trim();
+
+        if (comment) step.comment = comment;
+
+        return step;
+    });
+
+    data.duration = totalDuration;
+
+    // Remove obsolete fields if an older template contained them.
+    data.steps.forEach(function(step) {
+        delete step.starting_temperature;
+        delete step.ending_temperature;
+    });
+}
+
+function readBackSideCoatingFields(data) {
+    const material =
+        document.getElementById('backCoatingMaterial').value;
+
+    const thicknessUm =
+        Number(
+            document.getElementById(
+                'backCoatingThickness'
+            ).value
+        );
+
+    if (!['Ti', 'SrRuO3'].includes(material)) {
+        throw new Error(
+            'Coating material must be Ti or SrRuO3.'
+        );
+    }
+
+    if (
+        !Number.isFinite(thicknessUm) ||
+        thicknessUm <= 0
+    ) {
+        throw new Error(
+            'Thickness must be greater than zero.'
+        );
+    }
+
+    data.coating_material = material;
+
+    // NOMAD storage unit: meter
+    data.thickness = thicknessUm / 1e6;
+
+    // Preserve compatibility with the existing
+    // BackSideCoatingPDI reagent subsection.
+    data.coating_reagents = {
+        name: material
+    };
+
+    data.name =
+        material + ' ' +
+        formatNumber(thicknessUm) +
+        ' µm back-side coating';
+
+    // These inherited fields are not part of
+    // the PDI back-side coating recipe.
+    delete data.temperature;
+    delete data.duration;
+}
+
+
 function editorArchiveData() {
     const existing = editorItem && editorMode === 'edit'
         ? JSON.parse(JSON.stringify(editorItem.data || {}))
@@ -968,7 +3754,15 @@ function editorArchiveData() {
                 data.name = data.lab_id;
             }
         }
-        readDynamicFields(data);
+        if (currentSubtype === 'cleaning') {
+            readCleaningFields(data);
+        } else if (currentSubtype === 'annealing') {
+            readAnnealingFields(data);
+        } else if (currentSubtype === 'back_side_coating') {
+            readBackSideCoatingFields(data);
+        } else {
+            readDynamicFields(data);
+        }
     }
 
     if (currentType === 'sample_cut_recipe') {
@@ -982,41 +3776,142 @@ function editorArchiveData() {
     }
 
     if (currentType === 'holder') {
-        const size = selectedSquareSize('holderSize','holderCustomSize');
-        const rows = Array.from(document.querySelectorAll('.holder-position-row'));
-        if (!rows.length) throw new Error('A holder needs at least one position.');
-        const names = new Set();
-        data.positions = rows.map(function(row, index) {
-            const name = row.querySelector('.position-name').value.trim().toUpperCase();
-            if (!/^[A-Z][A-Z0-9]*$/.test(name)) throw new Error('Holder position names must use uppercase letters/numbers.');
-            if (names.has(name)) throw new Error('Holder position names must be unique.');
-            names.add(name);
+        const rows =
+            Array.from(
+                document.querySelectorAll(
+                    '.holder-position-row'
+                )
+            );
 
-            function optional(selector, scale) {
-                const raw = row.querySelector(selector).value.trim();
-                if (raw === '') return null;
-                const value = Number(raw);
-                if (!Number.isFinite(value)) throw new Error('Invalid number in holder position ' + name + '.');
-                return scale ? value / scale : value;
-            }
+        if (!rows.length) {
+            throw new Error(
+                'A holder needs at least one position.'
+            );
+        }
 
-            const result = {
-                name:name,
-                slot_geometry:{width:size/1000, length:size/1000}
-            };
-            const x = optional('.position-x',1000);
-            const y = optional('.position-y',1000);
-            const rho = optional('.position-rho',1000);
-            const theta = optional('.position-theta');
-            if (x !== null) result.x_position = x;
-            if (y !== null) result.y_position = y;
-            if (rho !== null) result.rho = rho;
-            if (theta !== null) result.theta = theta;
-            return result;
-        });
-        data.number_of_positions = data.positions.length;
-        data.tags = tagsArray(document.getElementById('holderTags').value);
-    }
+        const names =
+            new Set();
+
+        data.positions =
+            rows.map(
+                function(row) {
+                    const name =
+                        row
+                            .querySelector(
+                                '.position-name'
+                            )
+                            .value
+                            .trim()
+                            .toUpperCase();
+
+                    if (
+                        !/^[A-Z][A-Z0-9]*$/.test(
+                            name
+                        )
+                    ) {
+                        throw new Error(
+                            'Holder position names must use uppercase letters/numbers.'
+                        );
+                    }
+
+                    if (
+                        names.has(name)
+                    ) {
+                        throw new Error(
+                            'Holder position names must be unique.'
+                        );
+                    }
+
+                    names.add(name);
+
+                    const size =
+                        Number(
+                            row
+                                .querySelector(
+                                    '.position-size'
+                                )
+                                .value
+                        );
+
+                    const rho =
+                        Number(
+                            row
+                                .querySelector(
+                                    '.position-rho'
+                                )
+                                .value
+                        );
+
+                    const theta =
+                        Number(
+                            row
+                                .querySelector(
+                                    '.position-theta'
+                                )
+                                .value
+                        );
+
+                    if (
+                        !Number.isFinite(size) ||
+                        size <= 0
+                    ) {
+                        throw new Error(
+                            'Position ' +
+                            name +
+                            ' needs a valid size.'
+                        );
+                    }
+
+                    if (
+                        !Number.isFinite(rho) ||
+                        rho < 0
+                    ) {
+                        throw new Error(
+                            'Position ' +
+                            name +
+                            ' needs a valid Rho value.'
+                        );
+                    }
+
+                    if (
+                        !Number.isFinite(theta)
+                    ) {
+                        throw new Error(
+                            'Position ' +
+                            name +
+                            ' needs a valid Theta value.'
+                        );
+                    }
+
+                    return {
+                        name:
+                            name,
+
+                        slot_geometry: {
+                            width:
+                                size /
+                                1000,
+
+                            length:
+                                size /
+                                1000
+                        },
+
+                        rho:
+                            rho /
+                            1000,
+
+                        theta:
+                            theta
+                    };
+                }
+            );
+
+        data.number_of_positions =
+            data.positions.length;
+
+                data.tags = managedHolderTags(data);
+}
 
     if (currentType === 'insert') {
         const outer = selectedSquareSize('insertOuterSize','insertOuterCustom');
@@ -1024,7 +3919,7 @@ function editorArchiveData() {
         if (inner > outer) throw new Error('Sample opening cannot be larger than the outer insert size.');
         data.outer_geometry = {width:outer/1000, length:outer/1000};
         data.inner_geometry = {width:inner/1000, length:inner/1000};
-        data.tags = tagsArray(document.getElementById('insertTags').value);
+        data.tags = managedInsertTags(data);
     }
 
     return data;

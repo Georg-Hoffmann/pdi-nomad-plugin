@@ -51,19 +51,21 @@
             </div>
 
             <div id="processingFields" class="editor-section hidden">
-                <div class="field-grid">
-                    <div>
-                        <label for="processingTemplate">Start from existing recipe</label>
-                        <select id="processingTemplate">
-                            <option value="">Blank recipe</option>
-                        </select>
+                <div id="processingTemplateBlock">
+                    <div class="field-grid">
+                        <div>
+                            <label for="processingTemplate">Start from existing recipe</label>
+                            <select id="processingTemplate">
+                                <option value="">Blank recipe</option>
+                            </select>
+                        </div>
                     </div>
+                    <p class="helper processing-template-helper">
+                        Choose “Blank recipe” to create a new definition from scratch,<br>
+                        or use an existing NOMAD recipe as a template.
+                    </p>
                 </div>
                 <div id="processingDynamicFields" class="dynamic-fields"></div>
-                <p class="helper">
-                    Values offered in dropdowns are collected from the existing NOMAD recipes of this type.
-                    Choose “Custom value…” only when a new value is needed.
-                </p>
             </div>
 
             <div id="sampleCutFields" class="editor-section hidden">
@@ -126,8 +128,6 @@
                     <div>Name</div><div>X (mm)</div><div>Y (mm)</div><div>Rho (mm)</div><div>Theta (°)</div><div></div>
                 </div>
                 <div id="holderPositions"></div>
-                <label for="holderTags">Tags</label>
-                <input id="holderTags" type="text" placeholder="e.g. MBE, 10x10">
             </div>
 
             <div id="insertFields" class="editor-section hidden">
@@ -165,8 +165,6 @@
                         <input id="insertInnerCustom" type="number" step="0.1" min="0.1">
                     </div>
                 </div>
-                <label for="insertTags">Tags</label>
-                <input id="insertTags" type="text" placeholder="e.g. XPS, 5x5">
             </div>
 
             <div id="targetUploadFields">
