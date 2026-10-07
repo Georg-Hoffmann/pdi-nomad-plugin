@@ -11,8 +11,8 @@ from nomad.datamodel.metainfo.basesections import (
     Process,
 )
 from nomad.metainfo import (
-    MEnum,
     Category,
+    MEnum,
     Quantity,
     Reference,
     SchemaPackage,
@@ -231,7 +231,10 @@ class AnnealingRecipePDI(AnnealingRecipe):
 
     atmosphere = Quantity(
         type=str,
-        description='Gas atmosphere used during annealing, e.g. O2, N2, Ar, air, or vacuum.',
+        description=(
+            'Gas atmosphere used during annealing, e.g. O2, N2, Ar, '
+            'air, or vacuum.'
+        ),
         a_eln=ELNAnnotation(
             component=ELNComponentEnum.StringEditQuantity,
             label='Atmosphere',
@@ -249,7 +252,10 @@ class AnnealingRecipePDI(AnnealingRecipe):
 
     rf_power_w = Quantity(
         type=float,
-        description='RF plasma power in watts. Used for annealing in the MBE growth chamber.',
+        description=(
+            'RF plasma power in watts. Used for annealing in the MBE '
+            'growth chamber.'
+        ),
         a_eln=ELNAnnotation(
             component=ELNComponentEnum.NumberEditQuantity,
             label='RF power (W)',

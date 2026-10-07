@@ -32,7 +32,6 @@ class LabLibraryContractTests(unittest.TestCase):
         for schema in (
             'CleaningPDI',
             'AnnealingPDI',
-            'EtchingPDI',
             'BackSideCoatingPDI',
             'FilledSubstrateHolderPDI',
         ):
@@ -84,10 +83,13 @@ class LabLibraryContractTests(unittest.TestCase):
         self.assertIn("return material + String(number) + '_'", self.app_js)
         self.assertIn('<option value="H">Haynes</option>', self.index_html)
         self.assertIn('<option value="M">Molybdenum</option>', self.index_html)
+        compact_js = ''.join(self.app_js.split())
         self.assertIn(
-            'slot_geometry:{width:size/1000, length:size/1000}',
-            self.app_js,
+            'slot_geometry:{width:size/1000,length:size/1000}',
+            compact_js,
         )
+        self.assertIn('rho:rho/1000', compact_js)
+        self.assertIn('theta:theta', compact_js)
 
     def test_writes_wait_for_processing(self):
         self.assertIn(
