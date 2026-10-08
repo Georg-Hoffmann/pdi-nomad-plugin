@@ -1719,9 +1719,7 @@ class ExperimentMbePDI(Experiment, EntryData):
                     # Legacy experiments without nominal_layers retain the old
                     # behaviour of creating one empty layer.
                     layer_definitions = (
-                        list(self.nominal_layers)
-                        if self.nominal_layers
-                        else [None]
+                        list(self.nominal_layers) if self.nominal_layers else [None]
                     )
 
                     for layer_index, nominal_layer in enumerate(
@@ -1758,9 +1756,7 @@ class ExperimentMbePDI(Experiment, EntryData):
                             f'{experiment_path}{layer_id}.archive.{filetype}'
                         )
 
-                        if not archive.m_context.raw_path_exists(
-                            layer_filename
-                        ):
+                        if not archive.m_context.raw_path_exists(layer_filename):
                             create_archive(
                                 layer_archive.m_to_dict(),
                                 archive.m_context,
@@ -1781,17 +1777,13 @@ class ExperimentMbePDI(Experiment, EntryData):
                             )
                         )
 
-                    stack_filename = (
-                        f'{experiment_path}{stack_id}.archive.{filetype}'
-                    )
+                    stack_filename = f'{experiment_path}{stack_id}.archive.{filetype}'
                     sample_archive = EntryArchive(
                         m_context=archive.m_context,
                         data=new_thin_film_stack,
                     )
 
-                    if not archive.m_context.raw_path_exists(
-                        stack_filename
-                    ):
+                    if not archive.m_context.raw_path_exists(stack_filename):
                         create_archive(
                             sample_archive.m_to_dict(),
                             archive.m_context,
@@ -1808,7 +1800,6 @@ class ExperimentMbePDI(Experiment, EntryData):
                             ),
                         )
                     )
-
 
         # recalculate the growth start time and rewrite the HDF5 file
         if self.recalculate_growth_start_time:
