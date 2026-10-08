@@ -28,16 +28,12 @@ class ProcessingSampleCutContractTests(unittest.TestCase):
         self.assertIn(
             'number_of_samples: definition.recipe.numberOfSamples', self.app_js
         )
-        self.assertIn(
-            'children_geometry: sampleCutChildGeometry(', self.app_js
-        )
+        self.assertIn('children_geometry: sampleCutChildGeometry(', self.app_js)
         self.assertIn(
             'substrate.geometry,\n            definition.recipe.childrenGeometry',
             self.app_js,
         )
-        self.assertIn(
-            'geometry.height = parentGeometry.height', self.app_js
-        )
+        self.assertIn('geometry.height = parentGeometry.height', self.app_js)
         self.assertIn('trigger_cut_sample: true', self.app_js)
         self.assertNotIn('class="child-width', self.app_js)
         self.assertNotIn('class="child-length', self.app_js)
