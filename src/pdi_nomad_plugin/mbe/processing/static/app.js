@@ -581,6 +581,35 @@ function geometryXY(geometry) {
     return {width: width, length: length};
 }
 
+function sampleCutChildGeometry(parentGeometry, recipeGeometry) {
+    const child = geometryXY(recipeGeometry);
+    if (!child) {
+        throw new Error('Sample-cut recipe has no valid child geometry.');
+    }
+
+    const squareDef = 'nomad_material_processing.general.SquareCuboid';
+    const rectangleDef = 'nomad_material_processing.general.RectangleCuboid';
+    const isSquare = Math.abs(child.width - child.length) < 1e-9;
+
+    const geometry = {
+        m_def: isSquare ? squareDef : rectangleDef,
+        width: child.width
+    };
+
+    if (!isSquare) {
+        geometry.length = child.length;
+    }
+
+    if (parentGeometry &&
+        typeof parentGeometry === 'object' &&
+        parentGeometry.height !== undefined &&
+        parentGeometry.height !== null) {
+        geometry.height = parentGeometry.height;
+    }
+
+    return geometry;
+}
+
 function geometryMatches(first, second) {
     const a = geometryXY(first);
     const b = geometryXY(second);
@@ -866,7 +895,10 @@ function sampleCutArchiveData(definition, substrate, index) {
         name: schema.label + ' - ' + substrate.labId,
         datetime: new Date(definition.datetime).toISOString(),
         number_of_samples: definition.recipe.numberOfSamples,
-        children_geometry: definition.recipe.childrenGeometry,
+        children_geometry: sampleCutChildGeometry(
+            substrate.geometry,
+            definition.recipe.childrenGeometry
+        ),
         parent_sample: {
             name: substrate.labId,
             reference: nomadArchiveReference(

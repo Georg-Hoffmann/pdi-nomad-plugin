@@ -469,6 +469,34 @@ class BackSideCoatingRecipePDI(BackSideCoatingPDI, Recipe, EntryData):
     )
 
 
+class SampleCutGeometryPDI(ArchiveSection):
+    """Two-dimensional geometry used by sample-cut recipes."""
+
+    m_def = Section(label='Sample Cut Geometry')
+
+    width = Quantity(
+        type=np.float64,
+        unit='meter',
+        description='Width of the parent or child sample.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            defaultDisplayUnit='millimeter',
+            label='Width',
+        ),
+    )
+
+    length = Quantity(
+        type=np.float64,
+        unit='meter',
+        description='Length of the parent or child sample.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            defaultDisplayUnit='millimeter',
+            label='Length',
+        ),
+    )
+
+
 class SampleCutRecipePDI(Recipe, EntryData):
     """
     Reusable parameter set for a sample-cut operation.
@@ -493,8 +521,8 @@ class SampleCutRecipePDI(Recipe, EntryData):
     )
 
     input_geometry = SubSection(
-        section_def=Geometry,
-        description='Expected geometry of each parent substrate.',
+        section_def=SampleCutGeometryPDI,
+        description='Expected lateral geometry of each parent substrate.',
     )
 
     number_of_samples = Quantity(
@@ -507,8 +535,8 @@ class SampleCutRecipePDI(Recipe, EntryData):
     )
 
     children_geometry = SubSection(
-        section_def=Geometry,
-        description='Geometry assigned to each generated child substrate.',
+        section_def=SampleCutGeometryPDI,
+        description='Expected lateral geometry of each generated child substrate.',
     )
 
 
@@ -628,13 +656,14 @@ class SampleCutPDI(ProcessPDI, Process, EntryData):
                 except Exception:
                     pass
 
-                create_archive(
-                    children_archive.m_to_dict(),
-                    archive.m_context,
-                    children_filename,
-                    filetype,
-                    logger,
-                )
+                if not archive.m_context.raw_path_exists(children_filename):
+                    create_archive(
+                        children_archive.m_to_dict(),
+                        archive.m_context,
+                        children_filename,
+                        filetype,
+                        logger,
+                    )
                 generated_samples.append(
                     CompositeSystemReference(
                         name=children_object.name,

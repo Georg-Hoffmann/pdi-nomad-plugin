@@ -514,14 +514,14 @@ class SubstrateBatchMbe(SubstrateMbe, EntryData):
                         m_context=archive.m_context,
                         metadata=EntryMetadata(upload_id=archive.m_context.upload_id),
                     )
-                    create_archive(
-                        substrate_archive.m_to_dict(),
-                        archive.m_context,
-                        substrate_filename,
-                        filetype,
-                        logger,
-                        overwrite=True,
-                    )
+                    if not archive.m_context.raw_path_exists(substrate_filename):
+                        create_archive(
+                            substrate_archive.m_to_dict(),
+                            archive.m_context,
+                            substrate_filename,
+                            filetype,
+                            logger,
+                        )
                     self.substrates.append(
                         CompositeSystemReference(
                             name=substrate_object.name,
