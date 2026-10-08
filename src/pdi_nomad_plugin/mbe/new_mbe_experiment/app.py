@@ -5,11 +5,39 @@ from fastapi.responses import FileResponse, HTMLResponse
 from nomad.config import config
 from nomad.utils import hash as nomad_hash
 
+from pdi_nomad_plugin.mbe.materials import ELEMENT_SYMBOLS, MBE_DOPANT_ELEMENTS
+
 app = FastAPI()
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / 'templates'
 STATIC_DIR = BASE_DIR / 'static'
+
+
+DEFAULT_LAYER_COMPOSITIONS = (
+    'BaSnO3',
+    'LaInO3',
+    'SnO2',
+    'SnO',
+    'GeO2',
+    'Al2O3',
+    'In2O3',
+    'GeO',
+    'Ge',
+    'Al',
+    'Sn',
+    'Ba',
+    'BaO',
+)
+
+
+@app.get('/api/layer-options')
+async def layer_options():
+    return {
+        'elements': list(ELEMENT_SYMBOLS),
+        'dopants': list(MBE_DOPANT_ELEMENTS),
+        'compositions': list(DEFAULT_LAYER_COMPOSITIONS),
+    }
 
 
 @app.get('/api/entry-id')

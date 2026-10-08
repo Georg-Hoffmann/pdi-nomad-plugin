@@ -1,3 +1,5 @@
+import numpy as np
+
 from nomad.datamodel.data import EntryData
 from nomad.datamodel.metainfo.annotations import (
     ELNAnnotation,
@@ -37,6 +39,32 @@ from pdi_nomad_plugin.utils import (
 )
 
 m_package = SchemaPackage()
+
+ELEMENT_SYMBOLS = (
+    'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne',
+    'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar', 'K', 'Ca',
+    'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn',
+    'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr', 'Rb', 'Sr', 'Y', 'Zr',
+    'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn',
+    'Sb', 'Te', 'I', 'Xe', 'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd',
+    'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb',
+    'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg',
+    'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn', 'Fr', 'Ra', 'Ac', 'Th',
+    'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm',
+    'Md', 'No', 'Lr', 'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds',
+    'Rg', 'Cn', 'Nh', 'Fl', 'Mc', 'Lv', 'Ts', 'Og',
+)
+
+MBE_DOPANT_ELEMENTS = (
+    'Ba',
+    'Ge',
+    'Sn',
+    'Si',
+    'La',
+    'In',
+    'Sb',
+    'Al',
+)
 
 
 class SubstrateMbe(SystemPDI, CrystallineSubstrate, EntryData):
@@ -558,6 +586,32 @@ class ThinFilmMbe(SystemPDI, ThinFilm, EntryData):
         description='Searchable tags for this entry. Use Explore tab for searching.',
         a_eln=ELNAnnotation(
             component='StringEditQuantity',
+        ),
+    )
+    chemical_formula = Quantity(
+        type=str,
+        description='Nominal chemical formula of this thin-film layer.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.StringEditQuantity,
+            label='Composition',
+        ),
+    )
+    dopant_element = Quantity(
+        type=MEnum(*MBE_DOPANT_ELEMENTS),
+        description='Chemical element used as dopant in this layer.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.EnumEditQuantity,
+            label='Dopant element',
+        ),
+    )
+    nominal_thickness = Quantity(
+        type=np.float64,
+        unit='meter',
+        description='Nominal thickness of this thin-film layer.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            label='Nominal thickness',
+            defaultDisplayUnit='nanometer',
         ),
     )
     test_quantities = Quantity(

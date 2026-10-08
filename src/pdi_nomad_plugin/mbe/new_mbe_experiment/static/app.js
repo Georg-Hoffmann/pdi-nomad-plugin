@@ -53,8 +53,681 @@ const xpsInsertCatalog = [
 const experimentState = {
     growthRunId: '',
     holder: null,
-    positions: {}
+    positions: {},
+    layers: [
+        {
+            chemicalFormula: '',
+            dopantElement: '',
+            nominalThicknessNm: ''
+        }
+    ]
 };
+
+
+const layerCatalogState = {
+    elements: [],
+    dopants: [],
+    compositions: []
+};
+
+
+const blockedFormulaAbbreviations = new Set([
+    'STO',
+    'DSO',
+    'GSO',
+    'BSO',
+    'LAO',
+    'KTO',
+    'LSAT',
+    'LIO',
+    'YSZ'
+]);
+
+
+function emptyNominalLayer() {
+    return {
+        chemicalFormula: '',
+        dopantElement: '',
+        nominalThicknessNm: ''
+    };
+}
+
+
+function layerDisplayName(layer) {
+    const formula =
+        String(layer.chemicalFormula || '').trim();
+
+    const dopant =
+        String(layer.dopantElement || '').trim();
+
+    if (!formula) return 'Not specified';
+
+    return dopant
+        ? dopant + ':' + formula
+        : formula;
+}
+
+
+function validateChemicalFormula(value) {
+    const formula =
+        String(value || '').trim();
+
+    if (!formula) return false;
+
+    if (
+        blockedFormulaAbbreviations.has(
+            formula.toUpperCase()
+        )
+    ) {
+        return false;
+    }
+
+    const elements =
+        new Set(layerCatalogState.elements);
+
+    const tokenPattern =
+        /([A-Z][a-z]?)([1-9][0-9]*)?/g;
+
+    let position = 0;
+    let match;
+    let found = false;
+
+    while (
+        (match = tokenPattern.exec(formula)) !== null
+    ) {
+        found = true;
+
+        if (match.index !== position) {
+            return false;
+        }
+
+        if (!elements.has(match[1])) {
+            return false;
+        }
+
+        position = tokenPattern.lastIndex;
+    }
+
+    return (
+        found &&
+        position === formula.length
+    );
+}
+
+
+function rememberLayerCompositions() {
+    const values =
+        new Set(layerCatalogState.compositions);
+
+    experimentState.layers.forEach(
+        function(layer) {
+            const formula =
+                String(
+                    layer.chemicalFormula || ''
+                ).trim();
+
+            if (
+                formula &&
+                validateChemicalFormula(formula)
+            ) {
+                values.add(formula);
+            }
+        }
+    );
+
+    layerCatalogState.compositions =
+        Array.from(values).sort(
+            function(a, b) {
+                return a.localeCompare(b);
+            }
+        );
+}
+
+
+async function loadLayerCatalog() {
+    const response =
+        await fetch('./api/layer-options');
+
+    if (!response.ok) {
+        throw new Error(
+            'Could not load layer options: ' +
+            response.status
+        );
+    }
+
+    const options =
+        await response.json();
+
+    layerCatalogState.elements =
+        Array.isArray(options.elements)
+            ? options.elements
+            : [];
+
+    layerCatalogState.dopants =
+        Array.isArray(options.dopants)
+            ? options.dopants
+            : [];
+
+    const formulas =
+        new Set(
+            Array.isArray(options.compositions)
+                ? options.compositions
+                : []
+        );
+
+    try {
+        const experiments =
+            await queryEntriesBySchema(
+                'pdi_nomad_plugin.mbe.processes.ExperimentMbePDI',
+                1000,
+                ['data.nominal_layers']
+            );
+
+        experiments.forEach(function(entry) {
+            const layers =
+                (entry.data || {}).nominal_layers || [];
+
+            layers.forEach(function(layer) {
+                const formula =
+                    String(
+                        (layer || {}).chemical_formula || ''
+                    ).trim();
+
+                if (formula) formulas.add(formula);
+            });
+        });
+    } catch (error) {
+        console.warn(
+            'Could not load historical experiment layer compositions:',
+            error
+        );
+    }
+
+    try {
+        const films =
+            await queryEntriesBySchema(
+                'pdi_nomad_plugin.mbe.materials.ThinFilmMbe',
+                1000,
+                ['data.chemical_formula']
+            );
+
+        films.forEach(function(entry) {
+            const formula =
+                String(
+                    (entry.data || {}).chemical_formula || ''
+                ).trim();
+
+            if (formula) formulas.add(formula);
+        });
+    } catch (error) {
+        console.warn(
+            'Could not load historical thin-film compositions:',
+            error
+        );
+    }
+
+    layerCatalogState.compositions =
+        Array.from(formulas).sort(
+            function(a, b) {
+                return a.localeCompare(b);
+            }
+        );
+}
+
+
+function updateLayerStackPreview() {
+    const preview =
+        document.getElementById(
+            'layerStackPreview'
+        );
+
+    if (!preview) return;
+
+    preview.innerHTML = '';
+
+    experimentState.layers.forEach(
+        function(layer, index) {
+            const row =
+                document.createElement('div');
+
+            row.className =
+                'layer-preview-row';
+
+            const thickness =
+                String(
+                    layer.nominalThicknessNm || ''
+                ).trim();
+
+            row.textContent =
+                'Layer ' +
+                String(index + 1) +
+                ': ' +
+                layerDisplayName(layer) +
+                (
+                    thickness
+                        ? ' · ' + thickness + ' nm'
+                        : ''
+                );
+
+            preview.appendChild(row);
+        }
+    );
+}
+
+
+function renderLayerStack() {
+    const container =
+        document.getElementById(
+            'layerStackList'
+        );
+
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    experimentState.layers.forEach(
+        function(layer, index) {
+            const card =
+                document.createElement('div');
+
+            card.className = 'layer-card';
+
+            const header =
+                document.createElement('div');
+
+            header.className =
+                'layer-card-header';
+
+            const title =
+                document.createElement('strong');
+
+            title.textContent =
+                'Layer ' + String(index + 1);
+
+            header.appendChild(title);
+
+            if (index > 0) {
+                const remove =
+                    document.createElement('button');
+
+                remove.type = 'button';
+                remove.className =
+                    'secondary layer-remove-button';
+                remove.textContent = 'Remove';
+
+                remove.addEventListener(
+                    'click',
+                    function() {
+                        experimentState.layers.splice(
+                            index,
+                            1
+                        );
+
+                        renderLayerStack();
+                        updateStatePreview();
+                    }
+                );
+
+                header.appendChild(remove);
+            }
+
+            card.appendChild(header);
+
+            const compositionLabel =
+                document.createElement('label');
+
+            compositionLabel.textContent =
+                'Composition';
+
+            card.appendChild(compositionLabel);
+
+            const compositionSelect =
+                document.createElement('select');
+
+            const emptyOption =
+                document.createElement('option');
+
+            emptyOption.value = '';
+            emptyOption.textContent =
+                'Select composition...';
+
+            compositionSelect.appendChild(
+                emptyOption
+            );
+
+            layerCatalogState.compositions.forEach(
+                function(formula) {
+                    const option =
+                        document.createElement('option');
+
+                    option.value = formula;
+                    option.textContent = formula;
+
+                    compositionSelect.appendChild(
+                        option
+                    );
+                }
+            );
+
+            const otherOption =
+                document.createElement('option');
+
+            otherOption.value = '__other__';
+            otherOption.textContent = 'Other...';
+
+            compositionSelect.appendChild(
+                otherOption
+            );
+
+            const known =
+                layerCatalogState.compositions.includes(
+                    layer.chemicalFormula
+                );
+
+            if (known) {
+                compositionSelect.value =
+                    layer.chemicalFormula;
+            } else if (layer.chemicalFormula) {
+                compositionSelect.value =
+                    '__other__';
+            } else {
+                compositionSelect.value = '';
+            }
+
+            card.appendChild(
+                compositionSelect
+            );
+
+            const customInput =
+                document.createElement('input');
+
+            customInput.type = 'text';
+            customInput.className =
+                'layer-custom-composition';
+            customInput.placeholder =
+                'e.g. GdScO3';
+            customInput.value =
+                known
+                    ? ''
+                    : layer.chemicalFormula;
+
+            customInput.style.display =
+                compositionSelect.value === '__other__'
+                    ? 'block'
+                    : 'none';
+
+            compositionSelect.addEventListener(
+                'change',
+                function() {
+                    if (
+                        compositionSelect.value ===
+                        '__other__'
+                    ) {
+                        layer.chemicalFormula = '';
+                        customInput.value = '';
+                        customInput.style.display =
+                            'block';
+                        customInput.focus();
+                    } else {
+                        layer.chemicalFormula =
+                            compositionSelect.value;
+                        customInput.value = '';
+                        customInput.style.display =
+                            'none';
+                    }
+
+                    updateLayerStackPreview();
+                    updateStatePreview();
+                }
+            );
+
+            customInput.addEventListener(
+                'input',
+                function() {
+                    layer.chemicalFormula =
+                        customInput.value.trim();
+
+                    updateLayerStackPreview();
+                    updateStatePreview();
+                }
+            );
+
+            card.appendChild(customInput);
+
+            const formulaHelp =
+                document.createElement('div');
+
+            formulaHelp.className =
+                'small layer-help';
+
+            formulaHelp.textContent =
+                'Use a full chemical formula with valid element symbols.';
+
+            card.appendChild(formulaHelp);
+
+            const dopantLabel =
+                document.createElement('label');
+
+            dopantLabel.textContent =
+                'Dopant';
+
+            card.appendChild(dopantLabel);
+
+            const dopantSelect =
+                document.createElement('select');
+
+            const noDopant =
+                document.createElement('option');
+
+            noDopant.value = '';
+            noDopant.textContent = 'None';
+
+            dopantSelect.appendChild(
+                noDopant
+            );
+
+            layerCatalogState.dopants.forEach(
+                function(element) {
+                    const option =
+                        document.createElement('option');
+
+                    option.value = element;
+                    option.textContent = element;
+
+                    dopantSelect.appendChild(option);
+                }
+            );
+
+            dopantSelect.value =
+                layer.dopantElement || '';
+
+            dopantSelect.addEventListener(
+                'change',
+                function() {
+                    layer.dopantElement =
+                        dopantSelect.value;
+
+                    updateLayerStackPreview();
+                    updateStatePreview();
+                }
+            );
+
+            card.appendChild(dopantSelect);
+
+            const thicknessLabel =
+                document.createElement('label');
+
+            thicknessLabel.textContent =
+                'Nominal thickness (nm)';
+
+            card.appendChild(thicknessLabel);
+
+            const thicknessInput =
+                document.createElement('input');
+
+            thicknessInput.type = 'number';
+            thicknessInput.min = '0';
+            thicknessInput.step = '0.01';
+            thicknessInput.placeholder = 'e.g. 20';
+            thicknessInput.value =
+                layer.nominalThicknessNm;
+
+            thicknessInput.addEventListener(
+                'input',
+                function() {
+                    layer.nominalThicknessNm =
+                        thicknessInput.value;
+
+                    updateLayerStackPreview();
+                    updateStatePreview();
+                }
+            );
+
+            card.appendChild(
+                thicknessInput
+            );
+
+            const display =
+                document.createElement('div');
+
+            display.className =
+                'layer-display-name';
+
+            display.textContent =
+                'Display: ' +
+                layerDisplayName(layer);
+
+            card.appendChild(display);
+
+            container.appendChild(card);
+        }
+    );
+
+    updateLayerStackPreview();
+}
+
+
+function addNominalLayer() {
+    experimentState.layers.push(
+        emptyNominalLayer()
+    );
+
+    renderLayerStack();
+    updateStatePreview();
+}
+
+
+function resetLayerStack() {
+    experimentState.layers = [
+        emptyNominalLayer()
+    ];
+
+    renderLayerStack();
+    updateStatePreview();
+}
+
+
+function nominalLayerArchiveData() {
+    if (
+        !Array.isArray(experimentState.layers) ||
+        !experimentState.layers.length
+    ) {
+        throw new Error(
+            'At least one nominal layer is required.'
+        );
+    }
+
+    return experimentState.layers.map(
+        function(layer, index) {
+            const layerNumber =
+                index + 1;
+
+            const formula =
+                String(
+                    layer.chemicalFormula || ''
+                ).trim();
+
+            if (!formula) {
+                throw new Error(
+                    'Layer ' +
+                    layerNumber +
+                    ': composition is required.'
+                );
+            }
+
+            if (!validateChemicalFormula(formula)) {
+                throw new Error(
+                    'Layer ' +
+                    layerNumber +
+                    ': invalid chemical formula. ' +
+                    'Use a full formula such as BaSnO3 with valid element symbols.'
+                );
+            }
+
+            const dopant =
+                String(
+                    layer.dopantElement || ''
+                ).trim();
+
+            if (
+                dopant &&
+                !layerCatalogState.dopants.includes(
+                    dopant
+                )
+            ) {
+                throw new Error(
+                    'Layer ' +
+                    layerNumber +
+                    ': dopant must be a valid chemical element.'
+                );
+            }
+
+            const thickness =
+                Number(
+                    layer.nominalThicknessNm
+                );
+
+            if (
+                !Number.isFinite(thickness) ||
+                thickness <= 0
+            ) {
+                throw new Error(
+                    'Layer ' +
+                    layerNumber +
+                    ': nominal thickness must be greater than zero.'
+                );
+            }
+
+            const data = {
+                chemical_formula: formula,
+                nominal_thickness:
+                    thickness * 1e-9
+            };
+
+            if (dopant) {
+                data.dopant_element = dopant;
+            }
+
+            return data;
+        }
+    );
+}
+
+
+async function initialiseLayerStack() {
+    await loadLayerCatalog();
+
+    if (
+        !Array.isArray(experimentState.layers) ||
+        !experimentState.layers.length
+    ) {
+        experimentState.layers = [
+            emptyNominalLayer()
+        ];
+    }
+
+    renderLayerStack();
+}
 
 
 async function loadTreatmentHistoryEntries() {
@@ -429,6 +1102,7 @@ async function loadSubstrates() {
             'entry_id',
             'upload_id',
             'entry_name',
+            'data.m_def',
             'data.lab_id',
             'data.parent_sample',
             'data.material_designation',
@@ -447,9 +1121,21 @@ async function loadSubstrates() {
         ]
     );
 
-    console.log('SubstrateMbe query result:', entries);
+    const substrates = entries.filter(
+        function(entry) {
+            return (
+                (entry.data || {}).m_def ===
+                'pdi_nomad_plugin.mbe.materials.SubstrateMbe'
+            );
+        }
+    );
 
-    return entries;
+    console.log(
+        'SubstrateMbe query result:',
+        substrates
+    );
+
+    return substrates;
 }
 
 
@@ -867,6 +1553,8 @@ function selectSubstrate(
             substrate.offcut,
         offcutDirection:
             substrate.offcutDirection,
+        geometry:
+            substrate.geometry || null,
         asDelivered:
             substrate.asDelivered,
         processed:
@@ -920,15 +1608,45 @@ function renderSubstrateResults() {
     }
 
 
-    const substrates =
-        filteredSubstrates().filter(
-            function(substrate) {
-                return substrateFitsPosition(
-                    substrate,
-                    position
-                );
+    const substrateNameCollator =
+        new Intl.Collator(
+            undefined,
+            {
+                numeric: true,
+                sensitivity: 'base'
             }
         );
+
+    const substrates =
+        filteredSubstrates()
+            .filter(
+                function(substrate) {
+                    return substrateFitsPosition(
+                        substrate,
+                        position
+                    );
+                }
+            )
+            .sort(
+                function(a, b) {
+                    const aName =
+                        a.labId ||
+                        a.entryName ||
+                        a.entryId ||
+                        '';
+
+                    const bName =
+                        b.labId ||
+                        b.entryName ||
+                        b.entryId ||
+                        '';
+
+                    return substrateNameCollator.compare(
+                        aName,
+                        bName
+                    );
+                }
+            );
 
 
     if (substrates.length === 0) {
@@ -2764,6 +3482,9 @@ function experimentArchiveData(
         lab_id:
             growthRunId,
 
+        nominal_layers:
+            nominalLayerArchiveData(),
+
         substrate_holder: {
             reference:
                 filledHolderReference
@@ -3309,18 +4030,31 @@ async function loadInsertCatalogV2() {
                 'data.outer_geometry'
             ]
         );
+
         insertCatalogState = entries.map(function(entry) {
             const data = entry.data || {};
+
             return {
                 entryId: entry.entry_id,
                 uploadId: entry.upload_id,
-                name: data.lab_id || data.name || entry.entry_name || entry.entry_id,
-                innerGeometry: data.inner_geometry || null,
-                outerGeometry: data.outer_geometry || null
+                name:
+                    data.lab_id ||
+                    data.name ||
+                    entry.entry_name ||
+                    entry.entry_id,
+                innerGeometry:
+                    data.inner_geometry || null,
+                outerGeometry:
+                    data.outer_geometry || null
             };
         });
+
     } catch (error) {
-        console.warn('InsertReductionPDI catalog could not be loaded.', error);
+        console.warn(
+            'InsertReductionPDI catalog could not be loaded.',
+            error
+        );
+
         insertCatalogState = [];
     }
 }
@@ -3878,7 +4612,7 @@ function positionCoordinates(position) {
                 Math.cos(rad),
 
             y:
-                -rho *
+                rho *
                 Math.sin(rad)
         };
     }
@@ -3987,6 +4721,50 @@ function geometryMatches(first, second) {
 }
 
 
+function fallbackHolderSlotGeometry() {
+    const holder =
+        experimentState.holder || {};
+
+    const holderId =
+        String(
+            holder.id ||
+            holder.labId ||
+            holder.name ||
+            ''
+        ).trim();
+
+    if (holderId.endsWith('_10')) {
+        return {
+            width: 0.01,
+            length: 0.01
+        };
+    }
+
+    if (holderId.endsWith('_20')) {
+        return {
+            width: 0.02,
+            length: 0.02
+        };
+    }
+
+    return null;
+}
+
+
+function positionSlotGeometry(position) {
+    const explicitGeometry =
+        position
+            ? position.slot_geometry
+            : null;
+
+    if (geometryXY(explicitGeometry)) {
+        return explicitGeometry;
+    }
+
+    return fallbackHolderSlotGeometry();
+}
+
+
 function effectivePositionGeometry(position) {
     if (
         position &&
@@ -3996,9 +4774,7 @@ function effectivePositionGeometry(position) {
         return position.insertReduction.innerGeometry;
     }
 
-    return position
-        ? position.slot_geometry
-        : null;
+    return positionSlotGeometry(position);
 }
 
 
@@ -4007,8 +4783,17 @@ function insertFitsPosition(insert, position) {
         return false;
     }
 
-    if (!geometryXY(position.slot_geometry)) {
-        return true;
+    const slotGeometry =
+        positionSlotGeometry(position);
+
+    /*
+     * Never offer an insert when the physical slot
+     * geometry is unknown. Otherwise an oversized
+     * insert could be offered for an incompatible
+     * holder position.
+     */
+    if (!geometryXY(slotGeometry)) {
+        return false;
     }
 
     if (!geometryXY(insert.outerGeometry)) {
@@ -4017,7 +4802,7 @@ function insertFitsPosition(insert, position) {
 
     return geometryMatches(
         insert.outerGeometry,
-        position.slot_geometry
+        slotGeometry
     );
 }
 
@@ -4779,6 +5564,14 @@ async function saveExperimentToNomad() {
         return;
     }
 
+    try {
+        nominalLayerArchiveData();
+    } catch (error) {
+        status.textContent =
+            'Error: ' + error.message;
+        return;
+    }
+
     const physicalHolderEntryId =
         experimentState.holder.entryId;
 
@@ -4844,6 +5637,8 @@ async function saveExperimentToNomad() {
             experimentData,
             false
         );
+
+        rememberLayerCompositions();
 
         /*
          * Experiment exists successfully:
@@ -5084,6 +5879,7 @@ async function startNewExperiment() {
     document.getElementById('experimentSaveStatus').textContent = 'Configure the next experiment.';
     document.getElementById('filledHolderSaveStatus').textContent = 'A holder loadout can be saved without a Growth Run ID.';
     document.getElementById('startNewExperimentButton').style.display = 'none';
+    resetLayerStack();
     resetHolderSelection(true);
     await Promise.all([initialiseHolderSelect(), refreshSubstrateData()]);
     if (targetUpload) document.getElementById('targetUpload').value = targetUpload;
@@ -5126,7 +5922,8 @@ async function initialiseWorkflowV2() {
     await Promise.all([
         initialiseSubstrates(),
         initialiseTreatmentHistory(),
-        initialiseHolderSelect()
+        initialiseHolderSelect(),
+        initialiseLayerStack()
     ]);
 
     updateCombinedId();

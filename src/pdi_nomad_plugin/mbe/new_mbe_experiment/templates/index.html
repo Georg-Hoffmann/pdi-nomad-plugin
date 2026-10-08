@@ -48,7 +48,25 @@
             <label for="growthRunId">4.) Growth Run ID</label>
             <input id="growthRunId" placeholder="e.g. m84325" oninput="updateGrowthRunId()">
 
-            <div class="workflow-step-title">5.) Save experiment</div>
+            <div class="workflow-step-title">5.) Layer stack</div>
+            <p class="small">
+                Define the nominal layers from the substrate upwards.
+            </p>
+
+            <div id="layerStackList"></div>
+
+            <button
+                id="addLayerButton"
+                class="secondary full-width"
+                type="button"
+                onclick="addNominalLayer()"
+            >
+                + Add layer
+            </button>
+
+            <div id="layerStackPreview" class="layer-stack-preview"></div>
+
+            <div class="workflow-step-title">6.) Save experiment</div>
             <button id="saveExperimentButton" class="primary full-width" type="button" onclick="saveExperimentToNomad()">
                 Save experiment
             </button>

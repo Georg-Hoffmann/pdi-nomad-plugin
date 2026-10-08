@@ -764,10 +764,46 @@ class PlasmaSourcePDI(SourcePDI, PVDSource):
     )
 
 
+class RectangularGeometryPDI(ArchiveSection):
+    """Two-dimensional rectangular geometry for holder slots and inserts."""
+
+    m_def = Section(label='Rectangular Geometry')
+
+    width = Quantity(
+        type=float,
+        unit='meter',
+        description='Width of the rectangular geometry.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            defaultDisplayUnit='millimeter',
+            label='Width',
+        ),
+    )
+
+    length = Quantity(
+        type=float,
+        unit='meter',
+        description='Length of the rectangular geometry.',
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            defaultDisplayUnit='millimeter',
+            label='Length',
+        ),
+    )
+
+
 class InsertReductionPDI(InsertReduction, EntryData):
     m_def = Section(
         label='InsertReduction',
         categories=[PDIMBECategory],
+    )
+
+    inner_geometry = SubSection(
+        section_def=RectangularGeometryPDI,
+    )
+
+    outer_geometry = SubSection(
+        section_def=RectangularGeometryPDI,
     )
     tags = Quantity(
         type=str,
@@ -780,6 +816,10 @@ class InsertReductionPDI(InsertReduction, EntryData):
 
 
 class SubstrateHolderPositionPDI(SubstrateHolderPosition):
+    slot_geometry = SubSection(
+        section_def=RectangularGeometryPDI,
+    )
+
     rho = Quantity(
         type=float,
         unit='meter',
