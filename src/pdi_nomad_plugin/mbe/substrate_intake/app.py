@@ -28,7 +28,8 @@ class SubstrateIntakePreview(BaseModel):
     orientation: str = ''
     offcut_angle: float | None = None
     offcut_direction: str = ''
-    dimensions: str = ''
+    width_mm: float | None = None
+    length_mm: float | None = None
     geometry_shape: str = 'rectangle'
     radius_mm: float | None = None
     sector_angle_deg: float | None = None
@@ -61,29 +62,31 @@ def parse_orientation(value: str):
 GEOMETRY_M_DEF = 'pdi_nomad_plugin.general.schema.SubstrateGeometryPDI'
 
 
-def parse_dimensions(value: str):
-    """Parse WIDTH x LENGTH x THICKNESS in millimeters."""
-    cleaned = (value.strip().lower().replace('×', 'x')
-               .replace(',', '.').replace('mm', '').replace(' ', ''))
-    if not cleaned:
-        raise ValueError('Substrate dimensions are required.')
-    parts = cleaned.split('x')
-    if len(parts) != 3:
-        raise ValueError('Expected width x length x thickness in mm.')
-    try:
-        width, length, height = map(float, parts)
-    except ValueError as exc:
-        raise ValueError('Dimensions must be numeric.') from exc
-    if not all(math.isfinite(v) and v > 0 for v in (width, length, height)):
-        raise ValueError('All dimensions must be positive finite numbers.')
-    return {'m_def': GEOMETRY_M_DEF, 'shape': 'rectangle',
-            'width': width / 1000, 'length': length / 1000,
-            'height': height / 1000}
+def parse_dimensions(width, length, height):
+    """Validate rectangular substrate dimensions in millimeters."""
+    values = (width, length, height)
+    if any(value is None for value in values):
+        raise ValueError(
+            'Specify width, length and thickness in mm.'
+        )
+    if not all(math.isfinite(v) and v > 0 for v in values):
+        raise ValueError(
+            'Width, length and thickness must be positive finite numbers.'
+        )
+    return {
+        'm_def': GEOMETRY_M_DEF,
+        'shape': 'rectangle',
+        'width': width / 1000,
+        'length': length / 1000,
+        'height': height / 1000,
+    }
 
 
 def parse_geometry(data: SubstrateIntakePreview):
     if data.geometry_shape == 'rectangle':
-        return parse_dimensions(data.dimensions)
+        return parse_dimensions(
+            data.width_mm, data.length_mm, data.thickness_mm
+        )
     if data.geometry_shape not in ('circle', 'circular_sector'):
         raise ValueError('Unsupported substrate geometry shape.')
     radius = data.radius_mm if data.radius_mm is not None else 25.4
@@ -148,9 +151,7 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
 
     preview = {
         'data': archive_data,
-        'pending_mapping': {
-            'dimensions': data.dimensions or None,
-        },
+        'pending_mapping': {},
     }
 
     return preview
@@ -296,25 +297,8 @@ async def index():
 
             /* SUBSTRATE INTAKE GUIDANCE */
 
-            .reference-figure {
-                margin: 16px 0 0 0;
-            }
 
-            .reference-image {
-                display: block;
-                width: 100%;
-                height: auto;
-                border: 1px solid #d8dce3;
-                border-radius: 10px;
-                background: white;
-            }
 
-            .reference-caption {
-                margin-top: 6px;
-                color: #666;
-                font-size: 12px;
-                line-height: 1.35;
-            }
 
             .field-number {
                 color: #c62828;
@@ -357,28 +341,9 @@ async def index():
                         </button>
                     </div>
 
-                    <figure class="reference-figure">
-                        <img
-                            class="reference-image"
-                            src="static/substrate_box_reference.png"
-                            alt="Annotated substrate box label reference"
-                        >
-                        <figcaption class="reference-caption">
-                            Reference substrate box. Numbers 1?5 correspond
-                            to the numbered Batch data fields.
-                        </figcaption>
-                    </figure>
 
-                    <figure class="reference-figure">
-                        <img
-                            class="reference-image"
-                            src="static/substrate_nomad_field_mapping.png"
-                            alt="NOMAD substrate field mapping reference"
-                        >
-                        <figcaption class="reference-caption">
-                            NOMAD field mapping for the numbered label data.
-                        </figcaption>
-                    </figure>
+
+
 
 
                     <p class="small" style="margin-top:16px;">
@@ -446,19 +411,25 @@ async def index():
                         <option value="circular_sector">Circular wafer sector</option>
                     </select>
                     <div id="rectGeometryFields">
-                    <label for="dimensions">Dimensions</label>
-                    <input id="dimensions" placeholder="e.g. 10 x 10 x 0.5 mm">
+                        <label for="width_mm">Width [mm]</label>
+                        <input id="width_mm" type="number" step="any" min="0" placeholder="e.g. 10">
+
+                        <label for="length_mm">Length [mm]</label>
+                        <input id="length_mm" type="number" step="any" min="0" placeholder="e.g. 10">
                     </div>
+
                     <div id="roundGeometryFields" style="display:none">
                         <label for="radius_mm">Radius [mm] (2-inch wafer: 25.4)</label>
                         <input id="radius_mm" type="number" step="any" min="0" value="25.4">
-                        <label for="thickness_mm">Thickness [mm]</label>
-                        <input id="thickness_mm" type="number" step="any" min="0" placeholder="e.g. 0.5">
+
                         <div id="sectorAngleFields" style="display:none">
                             <label for="sector_angle_deg">Sector angle [degrees]</label>
                             <input id="sector_angle_deg" type="number" step="any" min="0" max="360" value="90">
                         </div>
                     </div>
+
+                    <label for="thickness_mm">Thickness [mm]</label>
+                    <input id="thickness_mm" type="number" step="any" min="0" placeholder="e.g. 0.5">
 
                     <label for="count">
                         <span class="field-number">5.</span> Number of substrates
@@ -626,7 +597,10 @@ document.getElementById('polishing').value,
                         : null,
                     offcut_direction:
                         document.getElementById('offcut_direction').value,
-                    dimensions: document.getElementById('dimensions').value,
+                    width_mm: document.getElementById('width_mm').value === ''
+                        ? null : Number(document.getElementById('width_mm').value),
+                    length_mm: document.getElementById('length_mm').value === ''
+                        ? null : Number(document.getElementById('length_mm').value),
                     geometry_shape: document.getElementById('geometry_shape').value,
                     radius_mm: document.getElementById('radius_mm').value === ''
                         ? null : Number(document.getElementById('radius_mm').value),
@@ -664,7 +638,8 @@ document.getElementById('polishing').value,
                 document.getElementById('orientation').value = '';
                 document.getElementById('offcut_angle').value = '';
                 document.getElementById('offcut_direction').value = '';
-                document.getElementById('dimensions').value = '';
+                document.getElementById('width_mm').value = '';
+                document.getElementById('length_mm').value = '';
                 document.getElementById('geometry_shape').value = 'rectangle';
                 document.getElementById('radius_mm').value = '25.4';
                 document.getElementById('thickness_mm').value = '';
