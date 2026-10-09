@@ -899,8 +899,59 @@ document.getElementById('polishing').value,
                             : 'Select a target upload to enable saving.';
                 });
 
+            let intakeRefreshPromise = null;
+
+            function refreshIntakeUploads() {
+                if (intakeRefreshPromise) {
+                    return intakeRefreshPromise;
+                }
+
+                const select = document.getElementById('targetUpload');
+                const oldUpload = select.value;
+
+                intakeRefreshPromise = loadUploads().then(function() {
+                    if (Array.from(select.options).some(function(opt) {
+                        return opt.value === oldUpload;
+                    })) {
+                        select.value = oldUpload;
+                    }
+
+                    document.getElementById('saveButton').disabled =
+                        !select.value;
+                }).finally(function() {
+                    intakeRefreshPromise = null;
+                });
+
+                return intakeRefreshPromise;
+            }
+
+            window.addEventListener('message', function(event) {
+                if (event.origin !== window.location.origin ||
+                    event.source !== window.parent ||
+                    !event.data ||
+                    event.data.type !== 'pdi-lab:resume') {
+                    return;
+                }
+
+                refreshIntakeUploads().catch(function(error) {
+                    console.error('Intake refresh failed:', error);
+                });
+            });
+
             updatePreview();
-            loadUploads();
+
+            loadUploads().finally(function() {
+                if (
+                    new URLSearchParams(window.location.search)
+                        .get('pdi_lab') === '1' &&
+                    window.parent !== window
+                ) {
+                    window.parent.postMessage(
+                        {type: 'pdi-lab:ready', app: 'intake'},
+                        window.location.origin
+                    );
+                }
+            });
         </script>
     </body>
     </html>

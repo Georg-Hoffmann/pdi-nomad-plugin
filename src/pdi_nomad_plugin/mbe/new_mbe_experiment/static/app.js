@@ -2493,20 +2493,14 @@ async function initialiseTreatmentRecipes() {
         );
 
 
-        select.addEventListener(
-            'change',
-            function() {
+        if (select.dataset.refreshHandlersInstalled !== '1') {
+            select.addEventListener('change', function() {
+                button.disabled = !select.value;
+            });
 
-                button.disabled =
-                    !select.value;
-            }
-        );
-
-
-        button.addEventListener(
-            'click',
-            addTreatmentToQueue
-        );
+            button.addEventListener('click', addTreatmentToQueue);
+            select.dataset.refreshHandlersInstalled = '1';
+        }
 
     } catch (error) {
 
@@ -5258,14 +5252,101 @@ window.addEventListener('message', function(event) {
         return;
     }
 
-    refreshSubstrateData().catch(function(error) {
-        console.error(
-            'Could not refresh MBE data after returning from processing:',
-            error
-        );
+    refreshExperimentCatalogs().catch(function(error) {
+        console.error('Could not refresh MBE catalogs:', error);
     });
 });
 
+
+function refreshExistingLayerSelectors() {
+    document.querySelectorAll('#layerStackList .layer-card').forEach(function(card) {
+        const controls = card.querySelectorAll('select');
+        if (controls.length < 2) return;
+
+        [
+            [controls[0], layerCatalogState.compositions, 'Select composition...', true],
+            [controls[1], layerCatalogState.dopants, 'None', false]
+        ].forEach(function(spec) {
+            const [select, values, emptyLabel, includeOther] = spec;
+            const previous = select.value;
+
+            select.replaceChildren(new Option(emptyLabel, ''));
+
+            values.forEach(function(value) {
+                select.add(new Option(value, value));
+            });
+
+            if (previous && previous !== '__other__' &&
+                !values.includes(previous)) {
+                const stale = new Option(previous + ' (not in catalog)', previous);
+                stale.disabled = true;
+                select.add(stale);
+            }
+
+            if (includeOther) {
+                select.add(new Option('Other...', '__other__'));
+            }
+
+            select.value = previous;
+        });
+    });
+}
+
+let experimentCatalogRefreshPromise = null;
+
+function refreshExperimentCatalogs() {
+    if (experimentCatalogRefreshPromise) {
+        return experimentCatalogRefreshPromise;
+    }
+
+    experimentCatalogRefreshPromise = (async function() {
+        const holder = document.getElementById('holderSelect');
+        const upload = document.getElementById('targetUpload');
+        const recipe = document.getElementById('treatmentRecipeSelect');
+
+        const oldHolder = holder.value;
+        const oldUpload = upload.value;
+        const oldRecipe = recipe ? recipe.value : '';
+
+        await refreshSubstrateData();
+
+        await Promise.all([
+            initialiseHolderSelect(),
+            loadLayerCatalog(),
+            loadUploads(),
+            recipe ? initialiseTreatmentRecipes() : Promise.resolve()
+        ]);
+
+        refreshExistingLayerSelectors();
+
+        function restore(select, value) {
+            if (value && Array.from(select.options).some(function(opt) {
+                return opt.value === value;
+            })) {
+                select.value = value;
+            }
+        }
+
+        restore(holder, oldHolder);
+        restore(upload, oldUpload);
+
+        if (!upload.value) {
+            restoreTargetUploadSelection();
+        }
+
+        if (recipe) {
+            restore(recipe, oldRecipe);
+            document.getElementById('addTreatmentButton').disabled =
+                !recipe.value;
+        }
+
+        // Keep unsaved holder positions and layer fields unchanged.
+    })().finally(function() {
+        experimentCatalogRefreshPromise = null;
+    });
+
+    return experimentCatalogRefreshPromise;
+}
 
 async function refreshSubstrateData() {
     const position = getActivePosition();

@@ -1095,7 +1095,7 @@ async function saveProcesses() {
                 'Updating NOMAD data (' + (attempt + 1) + '/8)...';
 
             try {
-                await refreshProcessingData();
+                await refreshProcessingData({catalogs: false});
 
                 indexed = uploadedEntries.every(function(uploaded) {
                     return treatmentHistoryState.some(function(entry) {
@@ -1252,18 +1252,65 @@ function applyIncomingSelection() {
 }
 
 
+function refreshProcessCardCatalogs() {
+    document.querySelectorAll('.process-card').forEach(function(card) {
+        const typeSelect = card.querySelector('.process-type');
+        const recipeSelect = card.querySelector('.recipe-select');
+        const oldType = typeSelect.value;
+        const oldRecipe = recipeSelect.value;
+
+        typeSelect.innerHTML = '';
+        Object.entries(recipeSchemas).forEach(function([key, definition]) {
+            typeSelect.add(new Option(definition.label || key, key));
+        });
+
+        if (oldType && !Array.from(typeSelect.options).some(function(opt) {
+            return opt.value === oldType;
+        })) {
+            const opt = new Option('Unavailable: ' + oldType, oldType);
+            opt.disabled = true;
+            typeSelect.add(opt);
+        }
+
+        typeSelect.value = oldType;
+        updateRecipeSelect(card);
+
+        if (oldRecipe && !Array.from(recipeSelect.options).some(function(opt) {
+            return opt.value === oldRecipe;
+        })) {
+            const opt = new Option('Unavailable recipe', oldRecipe);
+            opt.disabled = true;
+            recipeSelect.add(opt);
+        }
+
+        recipeSelect.value = oldRecipe;
+
+        const meta = card.querySelector('.process-meta');
+        if (meta && recipeSchemas[oldType]) {
+            meta.textContent = recipeSchemas[oldType].label || oldType;
+        }
+
+        updateProcessCardMode(card);
+    });
+}
+
 let processingRefreshPromise = null;
 
-function refreshProcessingData() {
+function refreshProcessingData(options) {
     if (processingRefreshPromise) {
         return processingRefreshPromise;
     }
 
     processingRefreshPromise = (async function() {
-        const [freshSubstrates, freshHistory] = await Promise.all([
-            loadSubstrates(),
-            loadTreatmentHistoryEntries()
-        ]);
+        const catalogs = !(options && options.catalogs === false);
+        if (catalogs) recipeSchemas = await loadProcessTypes();
+
+        const [freshSubstrates, freshRecipes, freshHistory] =
+            await Promise.all([
+                loadSubstrates(),
+                catalogs ? loadRecipes() : Promise.resolve(null),
+                loadTreatmentHistoryEntries()
+            ]);
 
         const selectedEntryIds = new Set(
             substrates
@@ -1294,6 +1341,22 @@ function refreshProcessingData() {
 
         substrates = freshSubstrates;
         treatmentHistoryState = freshHistory;
+
+        if (catalogs) {
+            recipes = freshRecipes;
+            refreshProcessCardCatalogs();
+
+            const upload = document.getElementById('targetUpload');
+            const oldUpload = upload.value;
+
+            await loadUploads();
+
+            if (Array.from(upload.options).some(function(opt) {
+                return opt.value === oldUpload;
+            })) {
+                upload.value = oldUpload;
+            }
+        }
 
         populateFilter(
             'materialFilter',

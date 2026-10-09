@@ -658,6 +658,12 @@ function closeModal() {
     document.getElementById('viewPanel').classList.add('hidden');
     document.getElementById('editorForm').classList.add('hidden');
     editorItem = null;
+
+    if (libraryRefreshDeferred) {
+        refreshLibraryData().catch(function(error) {
+            console.error('Deferred Lab Library refresh failed:', error);
+        });
+    }
 }
 
 function viewRow(label, value) {
@@ -4101,4 +4107,78 @@ async function initialise() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', initialise);
+let libraryRefreshPromise = null;
+let libraryRefreshDeferred = false;
+
+function refreshLibraryData() {
+    if (libraryRefreshPromise) {
+        return libraryRefreshPromise;
+    }
+
+    const modal = document.getElementById('modalBackdrop');
+
+    if (modal && !modal.classList.contains('hidden')) {
+        libraryRefreshDeferred = true;
+        return Promise.resolve();
+    }
+
+    libraryRefreshDeferred = false;
+
+    libraryRefreshPromise = (async function() {
+        const upload = document.getElementById('targetUpload');
+        const oldUpload = upload.value;
+
+        await loadLibraryTypes();
+
+        await Promise.all([
+            preloadProcessingCatalogs(),
+            preloadUsageCatalogs()
+        ]);
+
+        renderTypeTabs();
+        renderSubtypeTabs();
+
+        await Promise.all([
+            loadCurrentType(),
+            loadUploads()
+        ]);
+
+        if (Array.from(upload.options).some(function(opt) {
+            return opt.value === oldUpload;
+        })) {
+            upload.value = oldUpload;
+        }
+    })().finally(function() {
+        libraryRefreshPromise = null;
+    });
+
+    return libraryRefreshPromise;
+}
+
+window.addEventListener('message', function(event) {
+    if (event.origin !== window.location.origin ||
+        event.source !== window.parent ||
+        !event.data ||
+        event.data.type !== 'pdi-lab:resume') {
+        return;
+    }
+
+    refreshLibraryData().catch(function(error) {
+        console.error('Lab Library refresh failed:', error);
+    });
+});
+
+document.addEventListener('DOMContentLoaded', function() {
+    initialise().finally(function() {
+        if (
+            new URLSearchParams(window.location.search)
+                .get('pdi_lab') === '1' &&
+            window.parent !== window
+        ) {
+            window.parent.postMessage(
+                {type: 'pdi-lab:ready', app: 'library'},
+                window.location.origin
+            );
+        }
+    });
+});

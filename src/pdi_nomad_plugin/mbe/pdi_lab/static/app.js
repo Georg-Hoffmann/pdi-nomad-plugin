@@ -175,17 +175,10 @@ function goBack() {
         return;
     }
 
+    const targetReady = Boolean(appReady[target]);
     selectApp(target);
-
-    const frame = frames[target];
-
-    if (frame && frame.contentWindow) {
-        frame.contentWindow.postMessage(
-            {
-                type: 'pdi-lab:resume'
-            },
-            window.location.origin
-        );
+    if (targetReady) {
+        postToApp(target, {type: 'pdi-lab:resume'});
     }
 }
 
