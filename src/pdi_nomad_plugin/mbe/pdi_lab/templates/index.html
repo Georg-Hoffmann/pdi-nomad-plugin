@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PDI Lab</title>
+    <link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+<div class="workspace-shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-mark">PDI</div>
+            <div>
+                <div class="brand-title">PDI Lab</div>
+                <div class="brand-subtitle">MBE Workspace</div>
+            </div>
+        </div>
+
+        <nav class="workflow-nav" aria-label="PDI Lab workflow">
+            <button class="nav-item" data-app="intake" type="button">
+                <span class="nav-index">01</span>
+                <span>Substrate Intake</span>
+            </button>
+
+            <button class="nav-item" data-app="search" type="button">
+                <span class="nav-index">02</span>
+                <span>Substrate Search</span>
+            </button>
+
+            <button class="nav-item" data-app="processing" type="button">
+                <span class="nav-index">03</span>
+                <span>Processing</span>
+            </button>
+
+            <button class="nav-item" data-app="experiment" type="button">
+                <span class="nav-index">04</span>
+                <span>New MBE Experiment</span>
+            </button>
+
+            <button class="nav-item" data-app="library" type="button">
+                <span class="nav-index">05</span>
+                <span>Lab Library</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-footer">
+            PDI laboratory workflow
+        </div>
+    </aside>
+
+    <main class="content-column">
+        <header class="content-header">
+            <div>
+                <div class="eyebrow">PDI LAB WORKSPACE</div>
+                <h1 id="workspaceTitle">Substrate Intake</h1>
+            </div>
+            <div id="workspaceStep" class="step-badge">Workflow 01 / 05</div>
+        </header>
+
+        <section id="workspaceFrame" class="workspace-frame">
+            <div id="loadingState" class="loading-state">
+                Loading workspace...
+            </div>
+
+            <iframe
+                id="appFrame"
+                title="PDI Lab application"
+                src="about:blank"
+            ></iframe>
+        </section>
+    </main>
+</div>
+
+<script src="static/app.js"></script>
+</body>
+</html>
