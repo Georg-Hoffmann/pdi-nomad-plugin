@@ -191,12 +191,11 @@ button {
 }
 
 .content-header {
-    min-height: 76px;
-    padding: 4px 14px 15px 18px;
+    min-height: 42px;
+    padding: 0 14px 8px 18px;
     display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 20px;
+    align-items: center;
+    justify-content: flex-end;
 }
 
 .eyebrow {
@@ -304,4 +303,58 @@ button {
     .content-header {
         min-height: 66px;
     }
+}
+
+/* PDI LAB PURPLE WORKFLOW NAV */
+
+/* All workflow entries are purple even when inactive. */
+.nav-item[data-app="intake"] {
+    background: #f5edf9;
+    color: #76568a;
+}
+
+.nav-item[data-app="processing"] {
+    background: #efe3f5;
+    color: #704a84;
+}
+
+.nav-item[data-app="experiment"] {
+    background: #e8d8f0;
+    color: #673d7d;
+}
+
+.nav-item[data-app="library"] {
+    background: #ddc5e9;
+    color: #573068;
+}
+
+.nav-item[data-app="intake"] .nav-index {
+    color: #9c79af;
+}
+
+.nav-item[data-app="processing"] .nav-index {
+    color: #9166a7;
+}
+
+.nav-item[data-app="experiment"] .nav-index {
+    color: #825394;
+}
+
+.nav-item[data-app="library"] .nav-index {
+    color: #673776;
+}
+
+.nav-item:hover {
+    filter: brightness(0.98);
+    color: inherit;
+}
+
+/* Active item remains clearly highlighted. */
+.nav-item.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.nav-item.active .nav-index {
+    color: var(--accent);
 }

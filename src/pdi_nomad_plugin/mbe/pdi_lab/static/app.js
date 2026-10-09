@@ -16,43 +16,35 @@ const apps = {
     intake: {
         title: 'Substrate Intake',
         step: '01',
-        accent: '#138b8b',
-        accentSoft: '#e6f5f4',
+        accent: '#B78ACF',
+        accentSoft: '#F2EAF7',
         url: base + '/dashboards/substrate-intake/'
     },
-    search: {
-        title: 'Substrate Search',
-        step: '02',
-        accent: '#3178b9',
-        accentSoft: '#eaf2fa',
-        url: base + '/gui/search/substrateapp'
-    },
     processing: {
-        title: 'Processing',
-        step: '03',
-        accent: '#d47a24',
-        accentSoft: '#fff1e4',
+        title: 'Substrate Processing',
+        step: '02',
+        accent: '#A774C3',
+        accentSoft: '#EDE1F4',
         url: base + '/dashboards/processing/'
     },
     experiment: {
         title: 'New MBE Experiment',
-        step: '04',
-        accent: '#7656b5',
-        accentSoft: '#f0ebfa',
+        step: '03',
+        accent: '#9460B5',
+        accentSoft: '#E7D7F0',
         url: base + '/dashboards/new-mbe-experiment/'
     },
     library: {
         title: 'Lab Library',
-        step: '05',
-        accent: '#4a8b63',
-        accentSoft: '#eaf5ee',
+        step: '04',
+        accent: '#6F3F92',
+        accentSoft: '#DDC5E9',
         url: base + '/dashboards/lab-library/'
     }
 };
 
 const frame = document.getElementById('appFrame');
 const loadingState = document.getElementById('loadingState');
-const title = document.getElementById('workspaceTitle');
 const step = document.getElementById('workspaceStep');
 const shell = document.documentElement;
 
@@ -73,8 +65,7 @@ function selectApp(key, updateHistory = true) {
     shell.style.setProperty('--accent', config.accent);
     shell.style.setProperty('--accent-soft', config.accentSoft);
 
-    title.textContent = config.title;
-    step.textContent = 'Workflow ' + config.step + ' / 05';
+    step.textContent = config.step + ' / 04';
 
     loadingState.classList.remove('hidden');
 
