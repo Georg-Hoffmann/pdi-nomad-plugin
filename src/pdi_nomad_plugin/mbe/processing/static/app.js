@@ -1234,6 +1234,59 @@ function applyIncomingSelection() {
 }
 
 
+let processingRefreshPromise = null;
+
+function refreshProcessingData() {
+    if (processingRefreshPromise) {
+        return processingRefreshPromise;
+    }
+
+    processingRefreshPromise = (async function() {
+        const [freshSubstrates, freshHistory] = await Promise.all([
+            loadSubstrates(),
+            loadTreatmentHistoryEntries()
+        ]);
+
+        const selectedEntryIds = new Set(
+            substrates
+                .filter(function(item) { return item.selected; })
+                .map(function(item) { return item.entryId; })
+        );
+
+        freshSubstrates.forEach(function(item) {
+            item.selected =
+                selectedEntryIds.has(item.entryId) &&
+                !substrateHasBeenCut(item);
+        });
+
+        substrates = freshSubstrates;
+        treatmentHistoryState = freshHistory;
+
+        populateFilter(
+            'materialFilter',
+            substrates.map(function(item) { return item.material; })
+        );
+        populateFilter(
+            'batchFilter',
+            substrates.flatMap(function(item) {
+                return [item.crystalId, item.chargeId];
+            })
+        );
+        populateFilter(
+            'orientationFilter',
+            substrates.map(function(item) { return item.orientation; })
+        );
+
+        renderSubstrates();
+        updateSaveSummary();
+    })().finally(function() {
+        processingRefreshPromise = null;
+    });
+
+    return processingRefreshPromise;
+}
+
+
 window.addEventListener('message', function(event) {
     if (
         event.origin !== window.location.origin ||
@@ -1244,14 +1297,24 @@ window.addEventListener('message', function(event) {
 
     const data = event.data || {};
 
-    if (data.type === 'pdi-lab:activate-processing') {
-        selectIncomingSubstrate(
-            data.substrateEntryId
-        );
+    if (data.type === 'pdi-lab:resume') {
+        refreshProcessingData().catch(function(error) {
+            console.error('Could not refresh Processing data:', error);
+        });
+        return;
+    }
 
+    if (data.type === 'pdi-lab:activate-processing') {
         configurePdiLabReturnButton(
             'Back to MBE Experiment'
         );
+
+        refreshProcessingData().then(function() {
+            selectIncomingSubstrate(data.substrateEntryId);
+        }).catch(function(error) {
+            console.error('Could not refresh Processing data:', error);
+            selectIncomingSubstrate(data.substrateEntryId);
+        });
 
         return;
     }

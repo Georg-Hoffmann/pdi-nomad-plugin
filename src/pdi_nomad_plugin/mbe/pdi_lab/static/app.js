@@ -277,10 +277,15 @@ window.addEventListener('message', function(event) {
             navigationStack.push(sourceApp);
         }
 
+        const targetWasReady = Boolean(appReady[target]);
         selectApp(target);
 
         if (data.payload) {
             postToApp(target, data.payload);
+        } else if (targetWasReady) {
+            postToApp(target, {
+                type: 'pdi-lab:resume'
+            });
         }
 
         return;
@@ -294,7 +299,14 @@ window.addEventListener('message', function(event) {
 document.querySelectorAll('.nav-item').forEach(function(button) {
     button.addEventListener('click', function() {
         navigationStack.length = 0;
-        selectApp(button.dataset.app);
+        const key = button.dataset.app;
+        const wasReady = Boolean(appReady[key]);
+        selectApp(key);
+        if (wasReady) {
+            postToApp(key, {
+                type: 'pdi-lab:resume'
+            });
+        }
     });
 });
 

@@ -6045,4 +6045,14 @@ async function initialiseWorkflowV2() {
     updateStatePreview();
 }
 
-initialiseWorkflowV2();
+initialiseWorkflowV2().then(function() {
+    if (isInsidePdiLab()) {
+        window.parent.postMessage(
+            {
+                type: 'pdi-lab:ready',
+                app: 'experiment'
+            },
+            window.location.origin
+        );
+    }
+});
