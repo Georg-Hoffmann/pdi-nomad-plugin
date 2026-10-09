@@ -85,11 +85,7 @@ if (embeddedInNomad) {
     modeButton.title = 'Open PDI Lab full page';
 
     modeButton.addEventListener('click', function() {
-        window.open(
-            fullPageUrl,
-            '_blank',
-            'noopener'
-        );
+        window.top.location.href = fullPageUrl;
     });
 } else {
     modeButton.textContent = '← Back to NOMAD';

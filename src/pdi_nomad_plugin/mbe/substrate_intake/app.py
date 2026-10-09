@@ -1,9 +1,15 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from nomad.config import config
 from pydantic import BaseModel
 
 app = FastAPI()
+
+STATIC_DIR = Path(__file__).with_name('static')
+app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
 
 
 ORIENTATION_INDEX_COUNT = 3
@@ -17,6 +23,7 @@ class SubstrateIntakePreview(BaseModel):
     material: str = ''
     crystal_id: str = ''
     charge: str = ''
+    polishing: str = ''
     orientation: str = ''
     offcut_angle: float | None = None
     offcut_direction: str = ''
@@ -102,6 +109,7 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
         'material_designation': data.material or None,
         'crystal_id': data.crystal_id or None,
         'charge_id': data.charge or None,
+        'polishing': data.polishing or None,
         'offcut_angle': data.offcut_angle,
         'offcut_direction': data.offcut_direction or None,
         'number_of_substrates': data.count,
@@ -279,7 +287,45 @@ async def index():
                 padding: 6px 10px;
                 display: inline-block;
             }
-        </style>
+
+            /* SUBSTRATE INTAKE GUIDANCE */
+
+            .reference-figure {
+                margin: 16px 0 0 0;
+            }
+
+            .reference-image {
+                display: block;
+                width: 100%;
+                height: auto;
+                border: 1px solid #d8dce3;
+                border-radius: 10px;
+                background: white;
+            }
+
+            .reference-caption {
+                margin-top: 6px;
+                color: #666;
+                font-size: 12px;
+                line-height: 1.35;
+            }
+
+            .field-number {
+                color: #c62828;
+                font-weight: 800;
+                margin-right: 3px;
+            }
+
+            #polishing {
+                width: 100%;
+                box-sizing: border-box;
+                padding: 10px 12px;
+                border: 1px solid #cfd4dc;
+                border-radius: 6px;
+                background: white;
+            }
+
+</style>
     </head>
 
     <body>
@@ -305,6 +351,30 @@ async def index():
                         </button>
                     </div>
 
+                    <figure class="reference-figure">
+                        <img
+                            class="reference-image"
+                            src="static/substrate_box_reference.png"
+                            alt="Annotated substrate box label reference"
+                        >
+                        <figcaption class="reference-caption">
+                            Reference substrate box. Numbers 1?5 correspond
+                            to the numbered Batch data fields.
+                        </figcaption>
+                    </figure>
+
+                    <figure class="reference-figure">
+                        <img
+                            class="reference-image"
+                            src="static/substrate_nomad_field_mapping.png"
+                            alt="NOMAD substrate field mapping reference"
+                        >
+                        <figcaption class="reference-caption">
+                            NOMAD field mapping for the numbered label data.
+                        </figcaption>
+                    </figure>
+
+
                     <p class="small" style="margin-top:16px;">
                         Expected label information:
                         supplier, material, orientation, offcut,
@@ -316,16 +386,22 @@ async def index():
                 <div class="card">
                     <h2>2. Batch data</h2>
 
-                    <label for="supplier">Supplier</label>
+                    <label for="supplier">
+                        <span class="field-number">1.</span> Supplier
+                    </label>
                     <input id="supplier" placeholder="e.g. CTC">
 
-                    <label for="supplier_id">Supplier ID</label>
+                    <label for="supplier_id">
+                        <span class="field-number">1.</span> Supplier ID
+                    </label>
                     <input id="supplier_id" placeholder="e.g. CTC">
 
                     <label for="material">Material / Crystal</label>
                     <input id="material" placeholder="e.g. SrTiO3">
 
-                    <label for="crystal_id">Crystal ID</label>
+                    <label for="crystal_id">
+                        <span class="field-number">2.</span> Crystal ID
+                    </label>
                     <input
                         id="crystal_id"
                         placeholder="manufacturer crystal / boule ID"
@@ -340,13 +416,29 @@ async def index():
                     <label for="offcut_direction">Offcut direction</label>
                     <input id="offcut_direction" placeholder="e.g. towards [100]">
 
-                    <label for="charge">Charge / Batch ID</label>
+                    <label for="charge">
+                        <span class="field-number">3.</span> Charge / Batch ID
+                    </label>
                     <input id="charge" placeholder="e.g. 0228-0025-25-MN2490">
+
+                    <label for="polishing">
+                        <span class="field-number">4.</span> Polishing
+                    </label>
+                    <select id="polishing">
+                        <option value="">Select polishing...</option>
+                        <option value="Single-side">Single-side</option>
+                        <option value="Double-side">Double-side</option>
+                        <option value="other">other</option>
+                        <option value="none">none</option>
+                    </select>
+
 
                     <label for="dimensions">Dimensions</label>
                     <input id="dimensions" placeholder="e.g. 10 x 10 x 0.5 mm">
 
-                    <label for="count">Number of substrates</label>
+                    <label for="count">
+                        <span class="field-number">5.</span> Number of substrates
+                    </label>
                     <input
                         id="count"
                         type="number"
@@ -502,6 +594,8 @@ async def index():
                     material: document.getElementById('material').value,
                     crystal_id: document.getElementById('crystal_id').value,
                     charge: document.getElementById('charge').value,
+                    polishing:
+document.getElementById('polishing').value,
                     orientation: document.getElementById('orientation').value,
                     offcut_angle: document.getElementById('offcut_angle').value
                         ? parseFloat(document.getElementById('offcut_angle').value)
@@ -525,6 +619,7 @@ async def index():
                 document.getElementById('material').value = '';
                 document.getElementById('crystal_id').value = '';
                 document.getElementById('charge').value = '';
+                document.getElementById('polishing').value = '';
                 document.getElementById('orientation').value = '';
                 document.getElementById('offcut_angle').value = '';
                 document.getElementById('offcut_direction').value = '';
