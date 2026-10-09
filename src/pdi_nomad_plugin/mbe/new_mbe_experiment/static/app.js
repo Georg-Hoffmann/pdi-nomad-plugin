@@ -2925,7 +2925,9 @@ function renderTreatmentHistory() {
 
 
     if (
+        !experimentState.holder ||
         !position ||
+        position.position_usage !== 'substrate' ||
         !position.substrate
     ) {
 
@@ -4303,6 +4305,9 @@ async function selectHolder() {
         return;
     }
 
+    // The old history belongs to the previous holder.
+    document.getElementById('treatmentHistory').textContent = '';
+
     document
         .getElementById(
             'holderLabel'
@@ -4494,6 +4499,7 @@ async function selectHolder() {
 
         renderHolderImageV2();
         renderHolder();
+        renderTreatmentHistory();
 
         document
             .getElementById(
@@ -4948,8 +4954,8 @@ function selectHolderPosition(positionName) {
     picker.style.display = position.position_usage === 'substrate' ? 'block' : 'none';
     if (position.position_usage === 'substrate') {
         renderSubstrateResults();
-        renderTreatmentHistory();
     }
+    renderTreatmentHistory();
     updateProcessingButtonV2();
 }
 
@@ -5126,8 +5132,8 @@ function setPositionUsage(positionName, usage) {
     renderHolder();
     if (usage === 'substrate') {
         renderSubstrateResults();
-        renderTreatmentHistory();
     }
+    renderTreatmentHistory();
     updateProcessingButtonV2();
     updateStatePreview();
 }
@@ -6064,6 +6070,7 @@ function resetHolderSelection(clearSelect) {
     if (wrap) wrap.style.display = 'none';
     updateCombinedId();
     updateStatePreview();
+    renderTreatmentHistory();
 }
 
 
