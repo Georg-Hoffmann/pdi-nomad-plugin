@@ -474,3 +474,22 @@ button {
     border-color: #ad7cc5;
     transform: translateY(-1px);
 }
+
+
+/* PDI LAB PERSISTENT APP FRAMES */
+
+.workspace-frame {
+    position: relative;
+}
+
+.app-frame {
+    display: none;
+    width: 100%;
+    min-height: 760px;
+    height: 100%;
+    border: 0;
+}
+
+.app-frame.active {
+    display: block;
+}

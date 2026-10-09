@@ -5142,14 +5142,75 @@ function processingDashboardUrl() {
 }
 
 
+function isInsidePdiLab() {
+    if (window.parent === window) {
+        return false;
+    }
+
+    try {
+        return (
+            window.parent.location.origin === window.location.origin &&
+            window.parent.location.pathname.includes(
+                '/dashboards/pdi-lab/'
+            )
+        );
+    } catch (_) {
+        return (
+            new URLSearchParams(
+                window.location.search
+            ).get('pdi_lab') === '1'
+        );
+    }
+}
+
+
 function openSelectedSubstrateInProcessing() {
     const position = getActivePosition();
     if (!position || !position.substrate) return;
+
+    if (isInsidePdiLab()) {
+        window.parent.postMessage(
+            {
+                type: 'pdi-lab:navigate',
+                target: 'processing',
+                payload: {
+                    type: 'pdi-lab:activate-processing',
+                    substrateEntryId: position.substrate.entryId
+                }
+            },
+            window.location.origin
+        );
+        return;
+    }
+
     const params = new URLSearchParams();
     params.set('substrate_entry_id', position.substrate.entryId);
     params.set('return_url', window.location.href);
     window.location.href = processingDashboardUrl() + '?' + params.toString();
 }
+
+
+window.addEventListener('message', function(event) {
+    if (
+        event.origin !== window.location.origin ||
+        event.source !== window.parent
+    ) {
+        return;
+    }
+
+    const data = event.data || {};
+
+    if (data.type !== 'pdi-lab:resume') {
+        return;
+    }
+
+    refreshSubstrateData().catch(function(error) {
+        console.error(
+            'Could not refresh MBE data after returning from processing:',
+            error
+        );
+    });
+});
 
 
 async function refreshSubstrateData() {

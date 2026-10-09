@@ -1105,30 +1105,143 @@ async function saveProcesses() {
     }
 }
 
-function applyIncomingSelection() {
-    const params = new URLSearchParams(window.location.search);
-    const entryId = params.get('substrate_entry_id');
-    const returnUrl = params.get('return_url');
-    const returnLabel = params.get('return_label');
-    if (entryId) {
-        const selected = substrates.find(function(item) { return item.entryId === entryId; });
-        if (selected && !substrateHasBeenCut(selected)) {
-            selected.selected = true;
-            document.getElementById('substrateSearch').value = selected.labId;
-        }
+function selectIncomingSubstrate(entryId) {
+    if (!entryId) {
+        return false;
     }
+
+    const selected = substrates.find(function(item) {
+        return item.entryId === entryId;
+    });
+
+    if (!selected || substrateHasBeenCut(selected)) {
+        return false;
+    }
+
+    selected.selected = true;
+
+    const searchInput =
+        document.getElementById('substrateSearch');
+
+    if (searchInput) {
+        searchInput.value = selected.labId;
+    }
+
+    renderSubstrates();
+
+    return true;
+}
+
+
+function configurePdiLabReturnButton(label) {
+    const button =
+        document.getElementById('returnButton');
+
+    if (!button) {
+        return;
+    }
+
+    button.textContent =
+        label || 'Back to MBE Experiment';
+
+    button.style.display = 'inline-block';
+
+    button.onclick = function() {
+        button.style.display = 'none';
+
+        window.parent.postMessage(
+            {
+                type: 'pdi-lab:back'
+            },
+            window.location.origin
+        );
+    };
+}
+
+
+function applyIncomingSelection() {
+    const params =
+        new URLSearchParams(window.location.search);
+
+    const entryId =
+        params.get('substrate_entry_id');
+
+    const returnUrl =
+        params.get('return_url');
+
+    const returnLabel =
+        params.get('return_label');
+
+    if (entryId) {
+        selectIncomingSubstrate(entryId);
+    }
+
     if (returnUrl) {
         try {
-            const target = new URL(returnUrl, window.location.origin);
-            if (target.origin === window.location.origin) {
-                const button = document.getElementById('returnButton');
-                button.textContent = returnLabel || 'Back';
-                button.style.display = 'inline-block';
-                button.addEventListener('click', function() { window.location.href = target.href; });
+            const target =
+                new URL(
+                    returnUrl,
+                    window.location.origin
+                );
+
+            if (
+                target.origin ===
+                window.location.origin
+            ) {
+                const button =
+                    document.getElementById(
+                        'returnButton'
+                    );
+
+                button.textContent =
+                    returnLabel || 'Back';
+
+                button.style.display =
+                    'inline-block';
+
+                button.onclick = function() {
+                    window.location.href =
+                        target.href;
+                };
             }
         } catch (_) {}
     }
 }
+
+
+window.addEventListener('message', function(event) {
+    if (
+        event.origin !== window.location.origin ||
+        event.source !== window.parent
+    ) {
+        return;
+    }
+
+    const data = event.data || {};
+
+    if (data.type === 'pdi-lab:activate-processing') {
+        selectIncomingSubstrate(
+            data.substrateEntryId
+        );
+
+        configurePdiLabReturnButton(
+            'Back to MBE Experiment'
+        );
+
+        return;
+    }
+
+    if (data.type === 'pdi-lab:return-context') {
+        if (data.target === 'experiment') {
+            configurePdiLabReturnButton(
+                'Back to MBE Experiment'
+            );
+        }
+
+        return;
+    }
+});
+
 
 async function initialise() {
     try {
@@ -1151,6 +1264,22 @@ async function initialise() {
         addProcess();
         document.getElementById('saveProcessesButton').disabled = false;
         updateSaveSummary();
+
+        const pageParams =
+            new URLSearchParams(window.location.search);
+
+        if (
+            pageParams.get('pdi_lab') === '1' &&
+            window.parent !== window
+        ) {
+            window.parent.postMessage(
+                {
+                    type: 'pdi-lab:ready',
+                    app: 'processing'
+                },
+                window.location.origin
+            );
+        }
     } catch (error) {
         console.error(error);
         document.getElementById('substrateStatus').textContent = 'Failed to load NOMAD data.';
