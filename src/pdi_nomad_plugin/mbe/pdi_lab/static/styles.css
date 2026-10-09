@@ -358,3 +358,119 @@ button {
 .nav-item.active .nav-index {
     color: var(--accent);
 }
+
+/* PDI LAB EMBEDDED COMPACT LAYOUT */
+
+:root {
+    --sidebar-width: 185px;
+}
+
+.workspace-shell {
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    gap: 14px;
+    padding: 10px 12px 12px 10px;
+}
+
+.sidebar {
+    min-height: calc(100vh - 22px);
+}
+
+.brand {
+    gap: 9px;
+    padding: 2px 8px 22px 4px;
+}
+
+.brand-mark {
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    font-size: 11px;
+}
+
+.brand-title {
+    font-size: 17px;
+}
+
+.brand-subtitle {
+    font-size: 9px;
+}
+
+.nav-item {
+    min-height: 45px;
+    padding-left: 9px;
+    padding-right: 9px;
+    grid-template-columns: 27px 1fr;
+    border-radius: 11px;
+}
+
+.nav-index {
+    font-size: 9px;
+}
+
+.nav-item.active::before {
+    left: 9px;
+    right: 9px;
+}
+
+.nav-item.active::after {
+    left: calc(100% - 9px);
+    width: 24px;
+}
+
+.content-column {
+    min-height: calc(100vh - 22px);
+}
+
+.content-header {
+    min-height: 30px;
+    padding: 0 8px 5px 8px;
+}
+
+.step-badge {
+    padding: 5px 9px;
+    font-size: 10px;
+}
+
+.workspace-frame {
+    min-height: 760px;
+    border-radius: 20px;
+}
+
+#appFrame {
+    min-height: 760px;
+}
+
+.sidebar-footer {
+    padding-left: 6px;
+}
+
+
+/* PDI LAB WORKSPACE MODE BUTTON */
+
+.workspace-header-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.workspace-mode-button {
+    border: 1px solid #caa9db;
+    border-radius: 999px;
+    padding: 5px 11px;
+    background: #f2e8f7;
+    color: #714588;
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+        background 140ms ease,
+        border-color 140ms ease,
+        transform 140ms ease;
+}
+
+.workspace-mode-button:hover {
+    background: #e9d8f1;
+    border-color: #ad7cc5;
+    transform: translateY(-1px);
+}

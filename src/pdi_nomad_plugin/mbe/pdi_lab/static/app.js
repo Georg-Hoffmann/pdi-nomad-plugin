@@ -47,6 +47,36 @@ const frame = document.getElementById('appFrame');
 const loadingState = document.getElementById('loadingState');
 const step = document.getElementById('workspaceStep');
 const shell = document.documentElement;
+const modeButton = document.getElementById('workspaceModeButton');
+
+const fullPageUrl =
+    base + '/dashboards/pdi-lab/';
+
+const nomadDashboardUrl =
+    base + '/gui/v2/dashboard/pdi-lab';
+
+const embeddedInNomad =
+    window.self !== window.top;
+
+if (embeddedInNomad) {
+    modeButton.textContent = '↗ Full page';
+    modeButton.title = 'Open PDI Lab full page';
+
+    modeButton.addEventListener('click', function() {
+        window.open(
+            fullPageUrl,
+            '_blank',
+            'noopener'
+        );
+    });
+} else {
+    modeButton.textContent = '← Back to NOMAD';
+    modeButton.title = 'Return to NOMAD';
+
+    modeButton.addEventListener('click', function() {
+        window.location.href = nomadDashboardUrl;
+    });
+}
 
 function selectApp(key, updateHistory = true) {
     const config = apps[key];
