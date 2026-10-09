@@ -205,13 +205,14 @@ async function loadTreatmentHistoryEntries() {
         const entries = await queryEntries(
             definition.processSchema,
             500,
-            ['entry_id', 'upload_id', 'entry_name', 'data']
+            ['entry_id', 'upload_id', 'entry_name', 'mainfile', 'data']
         );
         entries.forEach(function(entry) {
             treatments.push({
                 entryId: entry.entry_id,
                 uploadId: entry.upload_id,
                 entryName: entry.entry_name || entry.entry_id,
+                mainfile: entry.mainfile || '',
                 type: type,
                 label: definition.label || type,
                 data: entry.data || {}
@@ -1011,6 +1012,7 @@ async function saveProcesses() {
 
     button.disabled = true;
     let saved = 0;
+    const uploadedEntries = [];
     try {
         for (let i = 0; i < definitions.length; i++) {
             const definition = definitions[i];
@@ -1046,7 +1048,12 @@ async function saveProcesses() {
                         String(i + 1) +
                         '...';
 
-                    await uploadArchive(uploadId, filename, data);
+                    const responseData = await uploadArchive(uploadId, filename, data);
+                    uploadedEntries.push({
+                        filename: filename,
+                        entryId: responseData.processing && responseData.processing.entry
+                            ? responseData.processing.entry.entry_id : null
+                    });
                     saved += 1;
                 }
             } else {
@@ -1067,62 +1074,73 @@ async function saveProcesses() {
                     definitions.length +
                     '...';
 
-                await uploadArchive(uploadId, filename, data);
+                const responseData = await uploadArchive(uploadId, filename, data);
+                uploadedEntries.push({
+                    filename: filename,
+                    entryId: responseData.processing && responseData.processing.entry
+                        ? responseData.processing.entry.entry_id : null
+                });
                 saved += 1;
             }
         }
 
-        status.textContent =
-            saved +
-            ' process/action entr' +
-            (saved === 1 ? 'y' : 'ies') +
-            ' saved. NOMAD processing was triggered.';
+        let indexed = false;
+        let lastRefreshError = null;
 
-        // Start with a clean Processing form after a successful upload.
-        // The reload also fetches the newly created processing history.
-        setTimeout(function() {
-            window.location.reload();
-        }, 500);
+        // Wait for NOMAD archive queries to expose all newly saved entries.
+        // The upload itself has already completed; never upload again here.
+        for (let attempt = 0; attempt < 8; attempt++) {
+            status.textContent =
+                saved + ' process/action entries saved. ' +
+                'Updating NOMAD data (' + (attempt + 1) + '/8)...';
 
-        return;
+            try {
+                await refreshProcessingData();
 
-        try {
-            const selectedEntryIds = new Set(
-                substrates
-                    .filter(function(item) { return item.selected; })
-                    .map(function(item) { return item.entryId; })
-            );
+                indexed = uploadedEntries.every(function(uploaded) {
+                    return treatmentHistoryState.some(function(entry) {
+                        return entry.uploadId === uploadId && (
+                            (uploaded.entryId &&
+                             entry.entryId === uploaded.entryId) ||
+                            String(entry.mainfile || '')
+                                .split('/').pop() === uploaded.filename
+                        );
+                    });
+                });
 
-            [substrates, treatmentHistoryState] = await Promise.all([
-                loadSubstrates(),
-                loadTreatmentHistoryEntries()
-            ]);
+                if (indexed) {
+                    break;
+                }
+            } catch (refreshError) {
+                lastRefreshError = refreshError;
+                console.warn('NOMAD refresh failed:', refreshError);
+            }
 
-            substrates.forEach(function(item) {
-                item.selected =
-                    selectedEntryIds.has(item.entryId) &&
-                    !substrateHasBeenCut(item);
-            });
-
-            populateFilter(
-                'materialFilter',
-                substrates.map(function(s) { return s.material; })
-            );
-            populateFilter(
-                'batchFilter',
-                substrates.flatMap(function(s) {
-                    return [s.crystalId, s.chargeId];
-                })
-            );
-            populateFilter(
-                'orientationFilter',
-                substrates.map(function(s) { return s.orientation; })
-            );
-            renderSubstrates();
-            updateSaveSummary();
-        } catch (historyError) {
-            console.warn('Process/substrate refresh failed:', historyError);
+            if (attempt < 7) {
+                await new Promise(function(resolve) {
+                    setTimeout(
+                        resolve,
+                        Math.min(1000 * (attempt + 1), 4000)
+                    );
+                });
+            }
         }
+
+        if (indexed) {
+            status.textContent =
+                saved + ' process/action entries saved and ' +
+                'visible in NOMAD. Processing display updated.';
+        } else {
+            status.textContent =
+                saved + ' process/action entries saved, but not ' +
+                'all are visible in NOMAD queries yet. ' +
+                'Switch away and back to refresh. ' +
+                'Do not upload the same processes again.' +
+                (lastRefreshError
+                    ? ' Last refresh error: ' + lastRefreshError.message
+                    : '');
+        }
+
     } catch (error) {
         status.textContent = (saved ? saved + ' process(es) saved; next process failed: ' : 'Error: ') + error.message;
     } finally {
@@ -1253,10 +1271,25 @@ function refreshProcessingData() {
                 .map(function(item) { return item.entryId; })
         );
 
+        const openHistoryIds = new Set(
+            substrates
+                .filter(function(item) { return item.historyOpen; })
+                .map(function(item) { return item.entryId; })
+        );
+
+        const cutParentIds = new Set(
+            freshSubstrates
+                .map(function(item) {
+                    return referenceEntryId(item.parentSample);
+                })
+                .filter(Boolean)
+        );
+
         freshSubstrates.forEach(function(item) {
             item.selected =
                 selectedEntryIds.has(item.entryId) &&
-                !substrateHasBeenCut(item);
+                !cutParentIds.has(item.entryId);
+            item.historyOpen = openHistoryIds.has(item.entryId);
         });
 
         substrates = freshSubstrates;
