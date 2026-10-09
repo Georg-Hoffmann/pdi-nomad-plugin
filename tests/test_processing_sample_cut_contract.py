@@ -33,7 +33,12 @@ class ProcessingSampleCutContractTests(unittest.TestCase):
             'substrate.geometry,\n            definition.recipe.childrenGeometry',
             self.app_js,
         )
-        self.assertIn('geometry.height = parentGeometry.height', self.app_js)
+        self.assertIn('geometryNumber(recipeGeometry.height)', self.app_js)
+        self.assertIn(
+            'geometryNumber(parentGeometry && parentGeometry.height)',
+            self.app_js,
+        )
+        self.assertIn('output.height = height', self.app_js)
         self.assertIn('trigger_cut_sample: true', self.app_js)
         self.assertNotIn('class="child-width', self.app_js)
         self.assertNotIn('class="child-length', self.app_js)

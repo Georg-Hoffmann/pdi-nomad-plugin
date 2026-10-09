@@ -16,6 +16,7 @@ app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
 ORIENTATION_INDEX_COUNT = 3
 DIMENSION_COUNT = 3
 GEOMETRY_EQUALITY_TOLERANCE = 1e-9
+MAX_SECTOR_ANGLE_DEG = 360.0
 
 
 class SubstrateIntakePreview(BaseModel):
@@ -66,13 +67,9 @@ def parse_dimensions(width, length, height):
     """Validate rectangular substrate dimensions in millimeters."""
     values = (width, length, height)
     if any(value is None for value in values):
-        raise ValueError(
-            'Specify width, length and thickness in mm.'
-        )
+        raise ValueError('Specify width, length and thickness in mm.')
     if not all(math.isfinite(v) and v > 0 for v in values):
-        raise ValueError(
-            'Width, length and thickness must be positive finite numbers.'
-        )
+        raise ValueError('Width, length and thickness must be positive finite numbers.')
     return {
         'm_def': GEOMETRY_M_DEF,
         'shape': 'rectangle',
@@ -84,23 +81,36 @@ def parse_dimensions(width, length, height):
 
 def parse_geometry(data: SubstrateIntakePreview):
     if data.geometry_shape == 'rectangle':
-        return parse_dimensions(
-            data.width_mm, data.length_mm, data.thickness_mm
-        )
+        return parse_dimensions(data.width_mm, data.length_mm, data.thickness_mm)
     if data.geometry_shape not in ('circle', 'circular_sector'):
         raise ValueError('Unsupported substrate geometry shape.')
     radius = data.radius_mm if data.radius_mm is not None else 25.4
-    angle = (360.0 if data.geometry_shape == 'circle'
-             else data.sector_angle_deg if data.sector_angle_deg is not None else 90.0)
+    angle = (
+        360.0
+        if data.geometry_shape == 'circle'
+        else data.sector_angle_deg
+        if data.sector_angle_deg is not None
+        else 90.0
+    )
     thickness = data.thickness_mm
     if thickness is None:
         raise ValueError('Specify wafer thickness in mm.')
-    if not (math.isfinite(radius) and radius > 0 and math.isfinite(thickness)
-            and thickness > 0 and math.isfinite(angle) and 0 < angle <= 360):
+    if not (
+        math.isfinite(radius)
+        and radius > 0
+        and math.isfinite(thickness)
+        and thickness > 0
+        and math.isfinite(angle)
+        and 0 < angle <= MAX_SECTOR_ANGLE_DEG
+    ):
         raise ValueError('Radius, thickness and angle must have valid positive values.')
-    return {'m_def': GEOMETRY_M_DEF, 'shape': data.geometry_shape,
-            'radius': radius / 1000, 'height': thickness / 1000,
-            'central_angle': angle}
+    return {
+        'm_def': GEOMETRY_M_DEF,
+        'shape': data.geometry_shape,
+        'radius': radius / 1000,
+        'height': thickness / 1000,
+        'central_angle': angle,
+    }
 
 
 @app.post('/api/preview')
@@ -416,31 +426,37 @@ async def index():
 
 
                     <label for="geometry_shape">Substrate geometry</label>
-                    <select id="geometry_shape" onchange="updateGeometryFields(); updatePreview()">
+                    <select id="geometry_shape"
+                            onchange="updateGeometryFields(); updatePreview()">
                         <option value="rectangle">Rectangle / square</option>
                         <option value="circle">Full circular wafer</option>
                         <option value="circular_sector">Circular wafer sector</option>
                     </select>
                     <div id="rectGeometryFields">
                         <label for="width_mm">Width [mm]</label>
-                        <input id="width_mm" type="number" step="any" min="0" placeholder="e.g. 10">
+                        <input id="width_mm" type="number" step="any" min="0"
+                            placeholder="e.g. 10">
 
                         <label for="length_mm">Length [mm]</label>
-                        <input id="length_mm" type="number" step="any" min="0" placeholder="e.g. 10">
+                        <input id="length_mm" type="number" step="any" min="0"
+                            placeholder="e.g. 10">
                     </div>
 
                     <div id="roundGeometryFields" style="display:none">
                         <label for="radius_mm">Radius [mm] (2-inch wafer: 25.4)</label>
-                        <input id="radius_mm" type="number" step="any" min="0" value="25.4">
+                        <input id="radius_mm" type="number" step="any" min="0"
+                            value="25.4">
 
                         <div id="sectorAngleFields" style="display:none">
                             <label for="sector_angle_deg">Sector angle [degrees]</label>
-                            <input id="sector_angle_deg" type="number" step="any" min="0" max="360" value="90">
+                            <input id="sector_angle_deg" type="number" step="any"
+                                min="0" max="360" value="90">
                         </div>
                     </div>
 
                     <label for="thickness_mm">Thickness [mm]</label>
-                    <input id="thickness_mm" type="number" step="any" min="0" placeholder="e.g. 0.5">
+                    <input id="thickness_mm" type="number" step="any" min="0"
+                        placeholder="e.g. 0.5">
 
                     <label for="count">
                         <span class="field-number">5.</span> Number of substrates
@@ -617,8 +633,10 @@ document.getElementById('polishing').value,
                         ? null : Number(document.getElementById('radius_mm').value),
                     thickness_mm: document.getElementById('thickness_mm').value === ''
                         ? null : Number(document.getElementById('thickness_mm').value),
-                    sector_angle_deg: document.getElementById('sector_angle_deg').value === ''
-                        ? null : Number(document.getElementById('sector_angle_deg').value),
+                    sector_angle_deg:
+                        document.getElementById('sector_angle_deg').value === ''
+                            ? null
+                            : Number(document.getElementById('sector_angle_deg').value),
                     count: parseInt(
                         document.getElementById('count').value || '1',
                         10
@@ -738,7 +756,9 @@ document.getElementById('polishing').value,
                     });
 
                     if (!previewResponse.ok) {
-                        const errorBody = await previewResponse.json().catch(() => ({}));
+                        const errorBody = await previewResponse.json().catch(
+                            () => ({})
+                        );
                         throw new Error(errorBody.detail ||
                             'Archive generation failed: ' + previewResponse.status);
                     }

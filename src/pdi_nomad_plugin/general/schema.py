@@ -485,31 +485,44 @@ class SubstrateGeometryPDI(Geometry):
         a_eln=ELNAnnotation(component=ELNComponentEnum.EnumEditQuantity),
     )
     width = Quantity(
-        type=np.float64, unit='meter',
+        type=np.float64,
+        unit='meter',
         description='Width of a rectangular substrate.',
-        a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity,
-                            defaultDisplayUnit='millimeter'),
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            defaultDisplayUnit='millimeter',
+        ),
     )
     length = Quantity(
-        type=np.float64, unit='meter',
+        type=np.float64,
+        unit='meter',
         description='Length of a rectangular substrate.',
-        a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity,
-                            defaultDisplayUnit='millimeter'),
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            defaultDisplayUnit='millimeter',
+        ),
     )
     height = Quantity(
-        type=np.float64, unit='meter',
+        type=np.float64,
+        unit='meter',
         description='Physical substrate thickness.',
-        a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity,
-                            defaultDisplayUnit='millimeter'),
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            defaultDisplayUnit='millimeter',
+        ),
     )
     radius = Quantity(
-        type=np.float64, unit='meter',
+        type=np.float64,
+        unit='meter',
         description='Radius of a circular wafer or sector.',
-        a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity,
-                            defaultDisplayUnit='millimeter'),
+        a_eln=ELNAnnotation(
+            component=ELNComponentEnum.NumberEditQuantity,
+            defaultDisplayUnit='millimeter',
+        ),
     )
     central_angle = Quantity(
-        type=np.float64, unit='degree',
+        type=np.float64,
+        unit='degree',
         description='Sector opening (90 degrees for quarter wafer, 360 for circle).',
         a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity),
     )
@@ -647,9 +660,11 @@ class SampleCutPDI(ProcessPDI, Process, EntryData):
                 # Materialize a new section rather than attaching the process-owned
                 # child subsection to another archive (avoids parent conflicts).
                 children_object.geometry = SubstrateGeometryPDI.m_from_dict(
-                    {key: value for key, value in
-                     self.children_geometry.m_to_dict().items()
-                     if key != 'm_def'}
+                    {
+                        key: value
+                        for key, value in self.children_geometry.m_to_dict().items()
+                        if key != 'm_def'
+                    }
                 )
             else:
                 logger.warning('No children geometry found. Leaving it empty.')

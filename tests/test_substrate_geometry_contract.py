@@ -1,4 +1,5 @@
 """Integration contracts for the shared PDI substrate geometry representation."""
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,4 +24,7 @@ def test_intake_and_consumers_reference_the_same_schema():
     experiment = EXPERIMENT.read_text(encoding='utf-8')
     assert 'function substrateFootprint(' in experiment
     assert 'function geometryFits(' in experiment
-    assert 'return false;\n    }\n\n    if (!substrateFootprint(substrate.geometry))' in experiment
+    assert (
+        'return false;\n    }\n\n    if (!substrateFootprint(substrate.geometry))'
+        in experiment
+    )
