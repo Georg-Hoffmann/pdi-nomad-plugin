@@ -4670,6 +4670,54 @@ function geometryNumber(value) {
 }
 
 
+function substrateFootprint(geometry) {
+    if (!geometry || typeof geometry !== 'object') return null;
+    const num = geometryNumber;
+    const kind = geometry.shape || '';
+    if (kind === 'circle' || kind === 'circular_sector' ||
+        (!kind && num(geometry.radius) > 0)) {
+        const radius = num(geometry.radius);
+        const angle = kind === 'circle' ? 360 :
+            (num(geometry.central_angle) || 360);
+        return radius > 0 && angle > 0 && angle <= 360
+            ? {shape: angle === 360 ? 'circle' : 'circular_sector',
+               radius: radius, central_angle: angle} : null;
+    }
+    const width = num(geometry.width);
+    const length = num(geometry.length) ??
+        ((geometry.m_def || '').endsWith('SquareCuboid') ? width : null);
+    return width > 0 && length > 0
+        ? {shape: 'rectangle', width: width, length: length} : null;
+}
+
+function geometryFits(candidate, opening) {
+    const a = substrateFootprint(candidate);
+    const b = substrateFootprint(opening);
+    if (!a || !b) return false;
+    const tolerance = 0.00005; // 0.05 mm
+    if (a.shape === 'rectangle' && b.shape === 'rectangle') {
+        return (a.width <= b.width + tolerance &&
+                a.length <= b.length + tolerance) ||
+               (a.length <= b.width + tolerance &&
+                a.width <= b.length + tolerance);
+    }
+    if (b.shape === 'circle') {
+        if (a.shape === 'rectangle') {
+            return Math.hypot(a.width, a.length) / 2 <= b.radius + tolerance;
+        }
+        return a.radius <= b.radius + tolerance;
+    }
+    if (b.shape === 'rectangle' && a.shape === 'circle') {
+        return 2 * a.radius <= Math.min(b.width, b.length) + tolerance;
+    }
+    if (b.shape === 'circular_sector' && a.shape === 'circular_sector') {
+        return a.radius <= b.radius + tolerance &&
+            a.central_angle <= b.central_angle + 1e-6;
+    }
+    // Unverified cross-shape/sector fit is unsafe.
+    return false;
+}
+
 function geometryXY(geometry) {
     if (
         !geometry ||
@@ -4733,6 +4781,12 @@ function fallbackHolderSlotGeometry() {
             ''
         ).trim();
 
+    if (holderId.endsWith('_1/4')) {
+        return {shape: 'circular_sector', radius: 0.0254, central_angle: 90};
+    }
+    if (holderId.endsWith('_2')) {
+        return {shape: 'circle', radius: 0.0254, central_angle: 360};
+    }
     if (holderId.endsWith('_10')) {
         return {
             width: 0.01,
@@ -4757,7 +4811,7 @@ function positionSlotGeometry(position) {
             ? position.slot_geometry
             : null;
 
-    if (geometryXY(explicitGeometry)) {
+    if (substrateFootprint(explicitGeometry)) {
         return explicitGeometry;
     }
 
@@ -4792,15 +4846,15 @@ function insertFitsPosition(insert, position) {
      * insert could be offered for an incompatible
      * holder position.
      */
-    if (!geometryXY(slotGeometry)) {
+    if (!substrateFootprint(slotGeometry)) {
         return false;
     }
 
-    if (!geometryXY(insert.outerGeometry)) {
+    if (!substrateFootprint(insert.outerGeometry)) {
         return false;
     }
 
-    return geometryMatches(
+    return geometryFits(
         insert.outerGeometry,
         slotGeometry
     );
@@ -4815,15 +4869,15 @@ function substrateFitsPosition(substrate, position) {
     const target =
         effectivePositionGeometry(position);
 
-    if (!geometryXY(target)) {
-        return true;
-    }
-
-    if (!geometryXY(substrate.geometry)) {
+    if (!substrateFootprint(target)) {
         return false;
     }
 
-    return geometryMatches(
+    if (!substrateFootprint(substrate.geometry)) {
+        return false;
+    }
+
+    return geometryFits(
         substrate.geometry,
         target
     );

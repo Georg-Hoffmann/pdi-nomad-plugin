@@ -1,6 +1,7 @@
+import math
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from nomad.config import config
@@ -28,6 +29,10 @@ class SubstrateIntakePreview(BaseModel):
     offcut_angle: float | None = None
     offcut_direction: str = ''
     dimensions: str = ''
+    geometry_shape: str = 'rectangle'
+    radius_mm: float | None = None
+    sector_angle_deg: float | None = None
+    thickness_mm: float | None = None
     count: int = 1
     notes: str = ''
 
@@ -53,54 +58,55 @@ def parse_orientation(value: str):
     }
 
 
+GEOMETRY_M_DEF = 'pdi_nomad_plugin.general.schema.SubstrateGeometryPDI'
+
+
 def parse_dimensions(value: str):
-    cleaned = (
-        value.strip()
-        .lower()
-        .replace('×', 'x')
-        .replace(',', '.')
-        .replace('mm', '')
-        .replace(' ', '')
-    )
-
+    """Parse WIDTH x LENGTH x THICKNESS in millimeters."""
+    cleaned = (value.strip().lower().replace('×', 'x')
+               .replace(',', '.').replace('mm', '').replace(' ', ''))
     if not cleaned:
-        return None
-
+        raise ValueError('Substrate dimensions are required.')
     parts = cleaned.split('x')
-    if len(parts) != DIMENSION_COUNT:
-        return None
-
+    if len(parts) != 3:
+        raise ValueError('Expected width x length x thickness in mm.')
     try:
-        width_mm, length_mm, height_mm = [float(part) for part in parts]
-    except ValueError:
-        return None
+        width, length, height = map(float, parts)
+    except ValueError as exc:
+        raise ValueError('Dimensions must be numeric.') from exc
+    if not all(math.isfinite(v) and v > 0 for v in (width, length, height)):
+        raise ValueError('All dimensions must be positive finite numbers.')
+    return {'m_def': GEOMETRY_M_DEF, 'shape': 'rectangle',
+            'width': width / 1000, 'length': length / 1000,
+            'height': height / 1000}
 
-    if width_mm <= 0 or length_mm <= 0 or height_mm <= 0:
-        return None
 
-    width_m = width_mm / 1000
-    length_m = length_mm / 1000
-    height_m = height_mm / 1000
-
-    if abs(width_mm - length_mm) < GEOMETRY_EQUALITY_TOLERANCE:
-        return {
-            'm_def': 'nomad_material_processing.general.SquareCuboid',
-            'width': width_m,
-            'height': height_m,
-        }
-
-    return {
-        'm_def': 'nomad_material_processing.general.RectangleCuboid',
-        'width': width_m,
-        'length': length_m,
-        'height': height_m,
-    }
+def parse_geometry(data: SubstrateIntakePreview):
+    if data.geometry_shape == 'rectangle':
+        return parse_dimensions(data.dimensions)
+    if data.geometry_shape not in ('circle', 'circular_sector'):
+        raise ValueError('Unsupported substrate geometry shape.')
+    radius = data.radius_mm if data.radius_mm is not None else 25.4
+    angle = (360.0 if data.geometry_shape == 'circle'
+             else data.sector_angle_deg if data.sector_angle_deg is not None else 90.0)
+    thickness = data.thickness_mm
+    if thickness is None:
+        raise ValueError('Specify wafer thickness in mm.')
+    if not (math.isfinite(radius) and radius > 0 and math.isfinite(thickness)
+            and thickness > 0 and math.isfinite(angle) and 0 < angle <= 360):
+        raise ValueError('Radius, thickness and angle must have valid positive values.')
+    return {'m_def': GEOMETRY_M_DEF, 'shape': data.geometry_shape,
+            'radius': radius / 1000, 'height': thickness / 1000,
+            'central_angle': angle}
 
 
 @app.post('/api/preview')
 async def preview_substrate_batch(data: SubstrateIntakePreview):
     orientation = parse_orientation(data.orientation)
-    geometry = parse_dimensions(data.dimensions)
+    try:
+        geometry = parse_geometry(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     archive_data = {
         'm_def': 'pdi_nomad_plugin.mbe.materials.SubstrateBatchMbe',
@@ -433,8 +439,26 @@ async def index():
                     </select>
 
 
+                    <label for="geometry_shape">Substrate geometry</label>
+                    <select id="geometry_shape" onchange="updateGeometryFields(); updatePreview()">
+                        <option value="rectangle">Rectangle / square</option>
+                        <option value="circle">Full circular wafer</option>
+                        <option value="circular_sector">Circular wafer sector</option>
+                    </select>
+                    <div id="rectGeometryFields">
                     <label for="dimensions">Dimensions</label>
                     <input id="dimensions" placeholder="e.g. 10 x 10 x 0.5 mm">
+                    </div>
+                    <div id="roundGeometryFields" style="display:none">
+                        <label for="radius_mm">Radius [mm] (2-inch wafer: 25.4)</label>
+                        <input id="radius_mm" type="number" step="any" min="0" value="25.4">
+                        <label for="thickness_mm">Thickness [mm]</label>
+                        <input id="thickness_mm" type="number" step="any" min="0" placeholder="e.g. 0.5">
+                        <div id="sectorAngleFields" style="display:none">
+                            <label for="sector_angle_deg">Sector angle [degrees]</label>
+                            <input id="sector_angle_deg" type="number" step="any" min="0" max="360" value="90">
+                        </div>
+                    </div>
 
                     <label for="count">
                         <span class="field-number">5.</span> Number of substrates
@@ -603,6 +627,13 @@ document.getElementById('polishing').value,
                     offcut_direction:
                         document.getElementById('offcut_direction').value,
                     dimensions: document.getElementById('dimensions').value,
+                    geometry_shape: document.getElementById('geometry_shape').value,
+                    radius_mm: document.getElementById('radius_mm').value === ''
+                        ? null : Number(document.getElementById('radius_mm').value),
+                    thickness_mm: document.getElementById('thickness_mm').value === ''
+                        ? null : Number(document.getElementById('thickness_mm').value),
+                    sector_angle_deg: document.getElementById('sector_angle_deg').value === ''
+                        ? null : Number(document.getElementById('sector_angle_deg').value),
                     count: parseInt(
                         document.getElementById('count').value || '1',
                         10
@@ -613,6 +644,16 @@ document.getElementById('polishing').value,
 
             // Clears the form back to defaults after a successful save,
             // so the next substrate batch can be entered right away.
+            function updateGeometryFields() {
+                const shape = document.getElementById('geometry_shape').value;
+                document.getElementById('rectGeometryFields').style.display =
+                    shape === 'rectangle' ? '' : 'none';
+                document.getElementById('roundGeometryFields').style.display =
+                    shape === 'rectangle' ? 'none' : '';
+                document.getElementById('sectorAngleFields').style.display =
+                    shape === 'circular_sector' ? '' : 'none';
+            }
+
             function resetForm() {
                 document.getElementById('supplier').value = '';
                 document.getElementById('supplier_id').value = '';
@@ -624,6 +665,11 @@ document.getElementById('polishing').value,
                 document.getElementById('offcut_angle').value = '';
                 document.getElementById('offcut_direction').value = '';
                 document.getElementById('dimensions').value = '';
+                document.getElementById('geometry_shape').value = 'rectangle';
+                document.getElementById('radius_mm').value = '25.4';
+                document.getElementById('thickness_mm').value = '';
+                document.getElementById('sector_angle_deg').value = '90';
+                updateGeometryFields();
                 document.getElementById('count').value = '10';
                 document.getElementById('notes').value = '';
                 updatePreview();
@@ -706,10 +752,9 @@ document.getElementById('polishing').value,
                     });
 
                     if (!previewResponse.ok) {
-                        throw new Error(
-                            'Archive generation failed: ' +
-                            previewResponse.status
-                        );
+                        const errorBody = await previewResponse.json().catch(() => ({}));
+                        throw new Error(errorBody.detail ||
+                            'Archive generation failed: ' + previewResponse.status);
                     }
 
                     const preview = await previewResponse.json();

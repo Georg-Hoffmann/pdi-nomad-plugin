@@ -582,51 +582,76 @@ function geometryXY(geometry) {
 }
 
 function sampleCutChildGeometry(parentGeometry, recipeGeometry) {
-    const child = geometryXY(recipeGeometry);
-    if (!child) {
+    if (!recipeGeometry || typeof recipeGeometry !== 'object') {
         throw new Error('Sample-cut recipe has no valid child geometry.');
     }
-
-    const squareDef = 'nomad_material_processing.general.SquareCuboid';
-    const rectangleDef = 'nomad_material_processing.general.RectangleCuboid';
-    const isSquare = Math.abs(child.width - child.length) < 1e-9;
-
-    const geometry = {
-        m_def: isSquare ? squareDef : rectangleDef,
-        width: child.width
+    const shape = recipeGeometry.shape || 'rectangle';
+    const output = {
+        m_def: 'pdi_nomad_plugin.general.schema.SubstrateGeometryPDI',
+        shape: shape
     };
-
-    if (!isSquare) {
-        geometry.length = child.length;
+    if (shape === 'rectangle') {
+        const width = geometryNumber(recipeGeometry.width);
+        const length = geometryNumber(recipeGeometry.length);
+        if (!(width > 0 && length > 0)) {
+            throw new Error('Cut recipe needs positive width and length.');
+        }
+        output.width = width;
+        output.length = length;
+    } else if (shape === 'circle' || shape === 'circular_sector') {
+        const radius = geometryNumber(recipeGeometry.radius);
+        const angle = shape === 'circle' ? 360 :
+            geometryNumber(recipeGeometry.central_angle);
+        if (!(radius > 0 && angle > 0 && angle <= 360)) {
+            throw new Error('Cut recipe needs valid radius and sector angle.');
+        }
+        output.radius = radius;
+        output.central_angle = angle;
+    } else {
+        throw new Error('Unsupported cut geometry: ' + shape);
     }
-
-    if (parentGeometry &&
-        typeof parentGeometry === 'object' &&
-        parentGeometry.height !== undefined &&
-        parentGeometry.height !== null) {
-        geometry.height = parentGeometry.height;
+    const height = geometryNumber(recipeGeometry.height) ??
+        geometryNumber(parentGeometry && parentGeometry.height);
+    if (!(height > 0)) {
+        throw new Error('Child substrate thickness is missing.');
     }
-
-    return geometry;
+    output.height = height;
+    return output;
 }
 
 function geometryMatches(first, second) {
+    if (!first || !second) return false;
+    const shapeA = first.shape || 'rectangle';
+    const shapeB = second.shape || 'rectangle';
+    if (shapeA !== shapeB) return false;
+    const tolerance = 0.00005;
+    if (shapeA === 'circle' || shapeA === 'circular_sector') {
+        const a = geometryNumber(first.radius);
+        const b = geometryNumber(second.radius);
+        const aa = shapeA === 'circle' ? 360 : geometryNumber(first.central_angle);
+        const bb = shapeB === 'circle' ? 360 : geometryNumber(second.central_angle);
+        return a > 0 && b > 0 && Math.abs(a - b) <= tolerance &&
+            aa > 0 && bb > 0 && Math.abs(aa - bb) < 1e-6;
+    }
     const a = geometryXY(first);
     const b = geometryXY(second);
     if (!a || !b) return false;
-
-    const tolerance = 0.00005;
-    const direct =
-        Math.abs(a.width - b.width) <= tolerance &&
-        Math.abs(a.length - b.length) <= tolerance;
-    const rotated =
-        Math.abs(a.width - b.length) <= tolerance &&
-        Math.abs(a.length - b.width) <= tolerance;
-
-    return direct || rotated;
+    return (Math.abs(a.width - b.width) <= tolerance &&
+            Math.abs(a.length - b.length) <= tolerance) ||
+           (Math.abs(a.width - b.length) <= tolerance &&
+            Math.abs(a.length - b.width) <= tolerance);
 }
 
 function geometryDisplay(geometry) {
+    if (geometry && (geometry.shape === 'circle' ||
+                     geometry.shape === 'circular_sector')) {
+        const radius = geometryNumber(geometry.radius);
+        const angle = geometry.shape === 'circle' ? 360 :
+            geometryNumber(geometry.central_angle);
+        return radius > 0 ?
+            ('R ' + (1000 * radius).toFixed(2) + ' mm, ' + angle + '°') :
+            'Not specified';
+    }
     const value = geometryXY(geometry);
     if (!value) return 'Not specified';
 

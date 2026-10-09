@@ -469,32 +469,56 @@ class BackSideCoatingRecipePDI(BackSideCoatingPDI, Recipe, EntryData):
     )
 
 
-class SampleCutGeometryPDI(ArchiveSection):
-    """Two-dimensional geometry used by sample-cut recipes."""
+class SubstrateGeometryPDI(Geometry):
+    """Physical substrate footprint and thickness, in SI units.
+
+    Coordinates are local to the substrate; orientation within a holder is
+    specified separately.  A circular sector uses a full wafer radius and an
+    angular opening, not its bounding rectangle.
+    """
+
+    m_def = Section(label='Substrate Geometry')
+
+    shape = Quantity(
+        type=MEnum('rectangle', 'circle', 'circular_sector'),
+        description='Physical footprint of the substrate.',
+        a_eln=ELNAnnotation(component=ELNComponentEnum.EnumEditQuantity),
+    )
+    width = Quantity(
+        type=np.float64, unit='meter',
+        description='Width of a rectangular substrate.',
+        a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity,
+                            defaultDisplayUnit='millimeter'),
+    )
+    length = Quantity(
+        type=np.float64, unit='meter',
+        description='Length of a rectangular substrate.',
+        a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity,
+                            defaultDisplayUnit='millimeter'),
+    )
+    height = Quantity(
+        type=np.float64, unit='meter',
+        description='Physical substrate thickness.',
+        a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity,
+                            defaultDisplayUnit='millimeter'),
+    )
+    radius = Quantity(
+        type=np.float64, unit='meter',
+        description='Radius of a circular wafer or sector.',
+        a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity,
+                            defaultDisplayUnit='millimeter'),
+    )
+    central_angle = Quantity(
+        type=np.float64, unit='degree',
+        description='Sector opening (90 degrees for quarter wafer, 360 for circle).',
+        a_eln=ELNAnnotation(component=ELNComponentEnum.NumberEditQuantity),
+    )
+
+
+class SampleCutGeometryPDI(SubstrateGeometryPDI):
+    """Backward compatible cutting-recipe geometry (width/length retained)."""
 
     m_def = Section(label='Sample Cut Geometry')
-
-    width = Quantity(
-        type=np.float64,
-        unit='meter',
-        description='Width of the parent or child sample.',
-        a_eln=ELNAnnotation(
-            component=ELNComponentEnum.NumberEditQuantity,
-            defaultDisplayUnit='millimeter',
-            label='Width',
-        ),
-    )
-
-    length = Quantity(
-        type=np.float64,
-        unit='meter',
-        description='Length of the parent or child sample.',
-        a_eln=ELNAnnotation(
-            component=ELNComponentEnum.NumberEditQuantity,
-            defaultDisplayUnit='millimeter',
-            label='Length',
-        ),
-    )
 
 
 class SampleCutRecipePDI(Recipe, EntryData):
@@ -573,7 +597,7 @@ class SampleCutPDI(ProcessPDI, Process, EntryData):
         label='Cut Sample',
     )
     children_geometry = SubSection(
-        section_def=Geometry,
+        section_def=SubstrateGeometryPDI,
         description='Section containing the geometry of the substrate.',
     )
     parent_sample = SubSection(
@@ -620,7 +644,13 @@ class SampleCutPDI(ProcessPDI, Process, EntryData):
             children_object = self.parent_sample.reference.m_copy(deep=False)
             children_object.parent_sample = None
             if self.children_geometry:
-                children_object.geometry = self.children_geometry
+                # Materialize a new section rather than attaching the process-owned
+                # child subsection to another archive (avoids parent conflicts).
+                children_object.geometry = SubstrateGeometryPDI.m_from_dict(
+                    {key: value for key, value in
+                     self.children_geometry.m_to_dict().items()
+                     if key != 'm_def'}
+                )
             else:
                 logger.warning('No children geometry found. Leaving it empty.')
 
