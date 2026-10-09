@@ -346,6 +346,17 @@ async def index():
 
 
 
+                    <figure style="margin:16px 0 0;">
+                        <img
+                            src="static/substrate_box_reference.png"
+                            alt="Substrate box with numbered red markings"
+                            style="width:100%;height:auto;border-radius:10px;"
+                        >
+                        <figcaption class="small">
+                            Numbers 1-5 correspond to the batch data fields.
+                        </figcaption>
+                    </figure>
+
                     <p class="small" style="margin-top:16px;">
                         Expected label information:
                         supplier, material, orientation, offcut,
