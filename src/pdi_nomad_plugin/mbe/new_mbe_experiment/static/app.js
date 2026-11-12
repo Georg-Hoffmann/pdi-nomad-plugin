@@ -844,18 +844,17 @@ function originalMbeSubstrateFields(data) {
     const miscut = (crystal.miscut || {}).cartesian_miscut || {};
     const ref = (miscut.reference_orientation || {});
     const tilt = Number(ref.angle);
-    const direct = ref.hkl_direct || {};
+    const direct = ref.hkl_reciprocal || {};
     const offcut = ref.angle !== undefined && Number.isFinite(tilt) ? String(tilt) + '°' : '';
     const offcutDirection = indices.every(function(k) {return direct[k] !== undefined && direct[k] !== null;})
         ? indices.map(function(k) {return direct[k];}).join(' ') : '';
-    const description = String(data.description || '');
-    const crystalMatch = description.match(/^Crystal ID:\s*(.*)$/m);
-    const chargeMatch = description.match(/^Charge ID:\s*(.*)$/m);
+    const crystalId = String(data.crystal_id || '').trim();
+    const chargeId = String(data.charge_id || '').trim();
     return {
         formula:formula, material:formula, orientation:orientation, offcut:offcut,
         offcutDirection:offcutDirection,
-        crystalId:crystalMatch ? crystalMatch[1].trim() : '',
-        chargeId:chargeMatch ? chargeMatch[1].trim() : ''
+        crystalId:crystalId,
+        chargeId:chargeId
     };
 }
 
@@ -2541,42 +2540,91 @@ async function queryEntriesBySchema(schema, pageSize, include, options) {
         required.data = dataRequired;
     }
 
-    const response = await fetch(
-        nomadApiBase() + '/entries/archive/query',
-        {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                // FIX: without an explicit owner NOMAD defaults to owner="public",
-                // which only returns PUBLISHED entries. Lab data lives in unpublished
-                // uploads, so every query came back empty. "visible" = public + everything
-                // the logged-in user can see (login is sent automatically via cookie).
-                owner: 'visible',
-                query: {
-                    'section_defs.definition_qualified_name': schema
-                },
-                pagination: {page_size: pageSize || 500},
-                required: required
-            })
-        }
-    );
-    if (!response.ok) {
-        throw new Error('NOMAD query failed for ' + schema + ': ' + response.status);
-    }
-    const result = await response.json();
-    return (result.data || []).map(function(entry) {
-        const archive = entry.archive || {};
-        return Object.assign(
-            {
-                entry_id: entry.entry_id,
-                upload_id: entry.upload_id,
-                data: archive.data || {}
-            },
-            archive.metadata || {}
-        );
-    });
-}
+    const allEntries = [];
+    const seen = new Set();
+    const seenCursors = new Set();
+    let cursor = null;
+    let complete = false;
 
+    for (let page = 0; page < 1000; page++) {
+        const pagination = {page_size: pageSize || 500};
+        if (cursor !== null) {
+            pagination.page_after_value = cursor;
+        }
+
+        const response = await fetch(
+            nomadApiBase() + '/entries/archive/query',
+            {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    owner: 'visible',
+                    query: {
+                        'section_defs.definition_qualified_name': schema
+                    },
+                    pagination: pagination,
+                    required: required
+                })
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error(
+                'NOMAD query failed for ' + schema +
+                ': HTTP ' + response.status
+            );
+        }
+
+        const result = await response.json();
+
+        if (!Array.isArray(result.data)) {
+            throw new Error('Invalid NOMAD query result for ' + schema);
+        }
+
+        for (const entry of result.data) {
+            if (!entry.entry_id) {
+                throw new Error('Missing entry_id for ' + schema);
+            }
+            if (seen.has(entry.entry_id)) continue;
+
+            seen.add(entry.entry_id);
+
+            const archive = entry.archive || {};
+            allEntries.push(Object.assign(
+                {
+                    entry_id: entry.entry_id,
+                    upload_id: entry.upload_id,
+                    data: archive.data || {}
+                },
+                archive.metadata || {}
+            ));
+        }
+
+        const next = result.pagination?.next_page_after_value;
+
+        if (next === undefined || next === null || next === '') {
+            complete = true;
+            break;
+        }
+
+        if (seenCursors.has(String(next))) {
+            throw new Error(
+                'NOMAD pagination cursor repeated for ' + schema
+            );
+        }
+
+        seenCursors.add(String(next));
+        cursor = next;
+    }
+
+    if (!complete) {
+        throw new Error(
+            'NOMAD pagination incomplete for ' + schema
+        );
+    }
+
+    return allEntries;
+}
 
 async function queryExperimentHolderReferences() {
     const response = await fetch(

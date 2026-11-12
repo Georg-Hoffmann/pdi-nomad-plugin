@@ -148,9 +148,8 @@ function sizeOf(geometry) {
     const width = millimeters(geometry?.width);
     const length = millimeters(geometry?.length ?? geometry?.width);
     if (!Number.isFinite(width) || !Number.isFinite(length)) return 'Other';
-    if (Math.abs(width - 10) < 0.1 && Math.abs(length - 10) < 0.1) return '10×10';
-    if (Math.abs(width - 5) < 0.1 && Math.abs(length - 5) < 0.1) return '5×5';
-    return 'Other';
+    const fmt = n => String(Number(n.toFixed(3)));
+    return `${fmt(length)}×${fmt(width)}`;
 }
 
 function ancestorsOf(id, parents) {
@@ -165,20 +164,21 @@ function ancestorsOf(id, parents) {
 
 function renderMaterial(name, samples) {
     const keys = ['processed','annealed','cleaned','etched','backcoated'];
-    const counts = {total:samples.length,size10:0,size5:0};
+    const counts = {total:samples.length};
+    const sizes = new Map();
 
     for (const key of keys) counts[key] = 0;
     for (const sample of samples) {
         for (const key of keys) if (sample[key]) counts[key]++;
-        if (sample.size === '10×10') counts.size10++;
-        if (sample.size === '5×5') counts.size5++;
+        sizes.set(sample.size, (sizes.get(sample.size) || 0) + 1);
     }
 
     const metrics = [
         ['Total',counts.total],
         ['Processed',counts.processed],
-        ['10×10',counts.size10],
-        ['5×5',counts.size5],
+        ...[...sizes].sort((a,b) =>
+            a[0].localeCompare(b[0], undefined, {numeric:true})
+        ).map(([size, count]) => [size === 'Other' ? 'Other' : size + ' mm', count]),
         ['Annealed',counts.annealed],
         ['Backcoated',counts.backcoated],
         ['Cleaned',counts.cleaned],
@@ -366,8 +366,26 @@ async function refresh() {
 
         show('total',samples.length);
         show('processed',samples.filter(s => s.processed).length);
-        show('size10',samples.filter(s => s.size === '10×10').length);
-        show('size5',samples.filter(s => s.size === '5×5').length);
+        const sizeCounts = new Map();
+        for (const sample of samples) {
+            sizeCounts.set(sample.size, (sizeCounts.get(sample.size) || 0) + 1);
+        }
+        const summary = el('sizeSummary');
+        summary.querySelectorAll('[data-dynamic-size]').forEach(n => n.remove());
+        for (const [size, count] of [...sizeCounts].sort((a,b) =>
+            a[0].localeCompare(b[0], undefined, {numeric:true})
+        )) {
+            const tile = document.createElement('div');
+            tile.className = 'tile';
+            tile.dataset.dynamicSize = '1';
+            const label = document.createElement('div');
+            label.className = 'muted';
+            label.textContent = size === 'Other' ? 'Other / unspecified' : size + ' mm';
+            const number = document.createElement('strong');
+            number.textContent = String(count);
+            tile.append(label, number);
+            summary.appendChild(tile);
+        }
 
         recent = results[results.length-1].map(r => ({
             id: r.entry_id,
@@ -407,3 +425,80 @@ el('refresh').addEventListener('click',refresh);
 el('entryType').addEventListener('change',renderRecent);
 el('entrySearch').addEventListener('input',renderRecent);
 refresh();
+
+// Refresh only when the inventory page is entered or restored.
+function inventoryIsVisible() {
+    if (document.hidden) return false;
+    try {
+        const frame = window.frameElement;
+        if (!frame) return true;
+        if (!frame.isConnected || !frame.getClientRects().length) return false;
+        for (let node = frame; node; node = node.parentElement) {
+            const style = window.parent.getComputedStyle(node);
+            if (node.hidden || node.getAttribute('aria-hidden') === 'true' ||
+                style.display === 'none' || style.visibility === 'hidden') {
+                return false;
+            }
+        }
+    } catch (_) {
+        return !document.hidden;
+    }
+    return true;
+}
+
+let inventoryWasVisible = inventoryIsVisible();
+let previousRoute = '';
+try { previousRoute = window.parent.location.href; } catch (_) {}
+
+function checkInventoryEntry() {
+    const visible = inventoryIsVisible();
+    let route = previousRoute;
+    try { route = window.parent.location.href; } catch (_) {}
+    const entered = visible && (!inventoryWasVisible || route !== previousRoute);
+    inventoryWasVisible = visible;
+    previousRoute = route;
+    if (entered && !el('refresh').disabled) refresh();
+}
+
+document.addEventListener('visibilitychange', checkInventoryEntry);
+window.addEventListener('focus', checkInventoryEntry);
+window.addEventListener('pageshow', event => {
+    if (event.persisted && !el('refresh').disabled) refresh();
+});
+
+try {
+    if (window.parent !== window) {
+        const parentWindow = window.parent;
+
+        // React/NOMAD navigation can hide or reveal an existing iframe.
+        const observer = new MutationObserver(checkInventoryEntry);
+        observer.observe(parentWindow.document.body, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ['style', 'class', 'hidden', 'aria-hidden']
+        });
+
+        parentWindow.addEventListener('popstate', checkInventoryEntry);
+        parentWindow.addEventListener('hashchange', checkInventoryEntry);
+
+        // Explicitly handle clicking an Inventory navigation item.
+        parentWindow.document.addEventListener('click', event => {
+            const target = event.target.closest?.('a,button,[role="tab"]');
+            if (!target || !/inventory/i.test(
+                (target.textContent || '') + ' ' +
+                (target.getAttribute('aria-label') || '')
+            )) return;
+
+            parentWindow.requestAnimationFrame(() => {
+                parentWindow.requestAnimationFrame(() => {
+                    if (inventoryIsVisible() && !el('refresh').disabled) {
+                        refresh();
+                    }
+                });
+            });
+        }, true);
+    }
+} catch (error) {
+    console.warn('Parent navigation monitoring unavailable:', error);
+}

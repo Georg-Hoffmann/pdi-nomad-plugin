@@ -37,8 +37,10 @@ class SubstrateIntakePreview(BaseModel):
     material_preset: str = ''  # Intake UI only; never a NOMAD Quantity.
     crystal_id: str = ''
     charge: str = ''
+    extended_charge: str = ''
+    letter: str = ''
     polishing: str = ''
-    delivery_date: date | None = None
+    delivery_date: date
     orientation: str = ''
     offcut_angle: float | None = None
     offcut_direction: str = ''
@@ -117,32 +119,37 @@ def safe_id_part(value: str) -> str:
     return value.strip('-_.')
 
 
+def derived_crystal_id(material: str, orientation: dict, letter: str = '') -> str:
+    indices = [orientation[k] for k in ('h_index', 'k_index', 'l_index')]
+    if all(abs(n) < 10 for n in indices):
+        hkl = ''.join(str(n) for n in indices)
+    else:
+        hkl = '_'.join(
+            f'{axis}{n}' for axis, n in zip('hkl', indices)
+        )
+    material_id = safe_id_part(material)
+    if not material_id:
+        raise ValueError('Material is required for Crystal ID.')
+    letter = letter.strip().upper()
+    if letter and (len(letter) != 1 or not letter.isascii() or not letter.isalpha()):
+        raise ValueError('Letter must be a single A-Z character.')
+    return f'{material_id}_{hkl}{letter}'
+
+
 def batch_lab_id(
     supplier_id: str,
-    crystal_id: str,
     charge_id: str,
     material: str,
     orientation: dict,
+    letter: str = '',
 ) -> str:
-    indices = [orientation[k] for k in ('h_index', 'k_index', 'l_index')]
-    encode = str
-    single_digit_limit = 10
-    hkl = (
-        ''.join(encode(n) for n in indices)
-        if all(abs(n) < single_digit_limit for n in indices)
-        else '_'.join(f'{axis}{encode(n)}' for axis, n in zip('hkl', indices))
-    )
     parts = [
         safe_id_part(supplier_id),
-        safe_id_part(material),
-        hkl,
-        safe_id_part(crystal_id),
+        derived_crystal_id(material, orientation, letter),
         safe_id_part(charge_id),
     ]
     if not all(parts):
-        raise ValueError(
-            'Supplier, material, orientation, crystal and charge are required.'
-        )
+        raise ValueError('Supplier, material, orientation and charge are required.')
     return '_'.join(parts)
 
 
@@ -491,12 +498,20 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
         if orientation is None:
             raise ValueError('Surface orientation (h k l) is required.')
         material_id = '8YSZ' if data.material_preset == '8ysz' else formula
+        if not data.charge.strip() or not data.extended_charge.strip():
+            raise ValueError('Charge ID and Extended Charge ID are required.')
+        combined_charge = (
+            safe_id_part(data.charge) + '_' + safe_id_part(data.extended_charge)
+        )
+        if not all((safe_id_part(data.charge), safe_id_part(data.extended_charge))):
+            raise ValueError('Both charge IDs must contain valid characters.')
+        crystal_id = derived_crystal_id(material_id, orientation, data.letter)
         lab_id = batch_lab_id(
             data.supplier_id,
-            data.crystal_id,
-            data.charge,
+            combined_charge,
             material_id,
             orientation,
+            data.letter,
         )
         offcut = parse_offcut_direction(data.offcut_direction)
         if data.offcut_angle is not None:
@@ -506,7 +521,7 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
                 )
             if data.offcut_angle > 0 and offcut is None:
                 raise ValueError(
-                    'Specify offcut direction [u v w] for a nonzero offcut.'
+                    'Specify offcut direction (h k l) for a nonzero offcut.'
                 )
         if offcut is not None and data.offcut_angle is None:
             raise ValueError(
@@ -524,8 +539,8 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
     # Free-text description is exclusively for user-supplied notes.
     base_data = {
         'm_def': 'pdi_nomad_plugin.mbe.materials.SubstrateMbe',
-        'crystal_id': data.crystal_id.strip(),
-        'charge_id': data.charge.strip(),
+        'crystal_id': crystal_id,
+        'charge_id': combined_charge,
         'supplier': data.supplier.strip(),
         'supplier_id': data.supplier_id.strip(),
         'components': [
@@ -559,7 +574,7 @@ async def preview_substrate_batch(data: SubstrateIntakePreview):
         base_data['crystal_properties']['miscut'] = {
             'cartesian_miscut': {
                 'reference_orientation': {
-                    'hkl_direct': offcut,
+                    'hkl_reciprocal': offcut,
                     'angle': data.offcut_angle,
                 },
             },
@@ -867,10 +882,8 @@ async def index():
 
                     <div class="reference-picker" id="pdiReferencePicker">
                         <h3>Sample Property Reference</h3>
-                        <p class="small">Optional: select a saved reference to fill substrate
-                            properties. Existing box-label and manually entered values take
-                            priority. The reference entry itself is never changed.</p>
-                        <label for="samplePropReference">Reference properties</label>
+
+
                         <div class="reference-picker-row">
                             <select id="samplePropReference" onchange="pdiIntakeApplyReference()">
                                 <option value="">Loading references...</option>
@@ -883,14 +896,55 @@ async def index():
                     </div>
 
                     <div class="upload-box">
-                        <p><strong>Substrate box image</strong></p>
+    <p><strong>Substrate box image</strong></p>
+
+    <button id="browseBoxImage" class="secondary" type="button">
+        Browse Image
+    </button>
+
+    <span id="boxPhotoFilename" class="small"></span>
+
+    <input id="boxPhoto" type="file"
+        accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+        style="display:none">
+
+    <img id="boxPhotoPreview"
+        alt="Selected substrate box photo"
+        style="display:block;max-width:100%;max-height:420px;
+               object-fit:contain;margin:8px 0">
+
+    <p class="small">
+        Draw a rectangle around the label text.
+    </p>
+
+    <div style="display:flex;gap:8px;justify-content:center;margin:8px 0">
+        <button id="extractBoxData" class="secondary"
+            type="button" disabled>
+            Extract Data
+        </button>
+    </div>
+
+    <p id="boxOcrStatus" class="small" role="status"></p>
+
+    <style>
+        #boxOcrResults {display:none!important}
+    </style>
+
+    <div id="boxOcrResults" style="display:none">
+        <pre id="boxOcrFields"></pre>
+        <pre id="boxOcrRawText"></pre>
+    </div>
+
+    <label for="informationSheet">Information Sheet (PDF)</label>
+                        <button id="browseInformationSheet" type="button"
+                            class="secondary">Choose PDF</button>
+                        <span id="informationSheetFilename" class="small"></span>
+                        <input id="informationSheet" type="file"
+                            accept=".pdf,application/pdf" style="display:none">
                         <p class="small">
-                            Image recognition is not active yet. Future label imports
-                            will override conflicting reference properties in Batch data.
+                            Files are stored once per batch in NOMAD.
+                            All generated substrates reference the same files.
                         </p>
-                        <button class="secondary" type="button">
-                            Load from image
-                        </button>
                     </div>
 
 
@@ -953,36 +1007,37 @@ async def index():
                         <p class="small">Real element symbols only; names or abbreviations need a documented formula.</p>
                     </div>
 
-                    <label for="crystal_id">
-                        <span class="field-number">2.</span> Crystal ID
-                    </label>
-                    <input
-                        id="crystal_id"
-                        placeholder="e.g. MN2490"
-                    >
-
-                    <label>Surface orientation (h k l)</label>
+                    <label>Surface orientation (h k l, optional letter)</label>
                     <div class="triplet" role="group" aria-label="Surface orientation Miller indices">
                         <input id="h_index" type="number" step="1" placeholder="h, e.g. 0" aria-label="h" required>
                         <input id="k_index" type="number" step="1" placeholder="k, e.g. 0" aria-label="k" required>
                         <input id="l_index" type="number" step="1" placeholder="l, e.g. 1" aria-label="l" required>
+                        <input id="letter" type="text" maxlength="1" placeholder="Letter" aria-label="Letter (optional)" style="text-transform:uppercase">
                     </div>
+                    <label for="crystal_id">Crystal ID (automatic)</label>
+                    <output id="crystal_id_display">Select material and orientation</output>
+                    <input id="crystal_id" type="hidden">
                     <p class="small">Three separate indices, including negative and multi-digit values.</p>
 
                     <label for="offcut_angle">Offcut angle (°)</label>
                     <input id="offcut_angle" type="number" step="any" min="0" placeholder="e.g. 0.1">
 
-                    <label>Offcut direction [u v w] (direct space)</label>
+                    <label>Offcut reference orientation (h k l, reciprocal space)</label>
                     <div class="triplet" role="group" aria-label="Offcut direction indices">
-                        <input id="u_index" type="number" step="1" placeholder="u, e.g. 1" aria-label="u">
-                        <input id="v_index" type="number" step="1" placeholder="v, e.g. 0" aria-label="v">
-                        <input id="w_index" type="number" step="1" placeholder="w, e.g. 0" aria-label="w">
+                        <input id="u_index" type="number" step="1" placeholder="h, e.g. 1" aria-label="Offcut h">
+                        <input id="v_index" type="number" step="1" placeholder="k, e.g. 0" aria-label="Offcut k">
+                        <input id="w_index" type="number" step="1" placeholder="l, e.g. 0" aria-label="Offcut l">
                     </div>
 
                     <label for="charge">
                         <span class="field-number">3.</span> Charge / Batch ID
                     </label>
-                    <input id="charge" placeholder="e.g. 0228/0025/25">
+                    <input id="charge" placeholder="e.g. 0228/0025/25" required>
+
+                    <label for="extended_charge">
+                        Extended Charge ID
+                    </label>
+                    <input id="extended_charge" placeholder="e.g. P46310" required>
 
                     <label for="polishing">
                         <span class="field-number">4.</span> Polishing
@@ -996,7 +1051,7 @@ async def index():
                     </select>
 
                     <label for="delivery_date">Delivery date</label>
-                    <input id="delivery_date" type="date">
+                    <input id="delivery_date" type="date" required>
                     <p class="small">Date only; stored in NOMAD as 00:00 UTC.</p>
 
                     <label for="geometry_shape">Substrate geometry</label>
@@ -1146,7 +1201,9 @@ async def index():
 
             </div>
         </div>
-        <script src="static/intake_reference.js?v=9"></script>
+        <script src="static/intake_reference.js?v=10"></script>
+        <script src="static/ocr/tesseract.min.js?v=7"></script>
+        <script src="static/intake_box_ocr.js?v=8"></script>
         <script src="static/intake_upload_feedback.js?v=8"></script>
         <script src="static/intake_duplicate_guard.js?v=10"></script>
         <script>
@@ -1187,12 +1244,14 @@ async def index():
                 const supplierId = cleanPart(
                     document.getElementById('supplier_id').value
                 );
-                const crystalId = cleanPart(
-                    document.getElementById('crystal_id').value
-                );
-                const charge = cleanPart(
+                const chargePrimary = cleanPart(
                     document.getElementById('charge').value
                 );
+                const chargeExtended = cleanPart(
+                    document.getElementById('extended_charge').value
+                );
+                const charge = [chargePrimary, chargeExtended]
+                    .filter(Boolean).join('_');
 
                 const countInput = document.getElementById('count');
                 const preview = document.getElementById('childPreview');
@@ -1220,37 +1279,33 @@ async def index():
                 const validHkl = hkl.every(v => /^[+-]?\\d+$/.test(v)) &&
                     hkl.some(v => Number(v) !== 0);
 
-                if (![supplierId, material, crystalId, charge].every(Boolean) ||
-                    !validHkl) {
-                    batchPreview.textContent =
-                        'Enter supplier, material, orientation, crystal and charge';
-                    preview.innerHTML = '';
-                    return;
+                let crystalId = '';
+                if (material && validHkl) {
+                    const indices = hkl.map(Number);
+                    const orientationId = indices.every(n => Math.abs(n) < 10)
+                        ? indices.map(String).join('')
+                        : indices.map((n, i) =>
+                            ['h', 'k', 'l'][i] + String(n)).join('_');
+                    const letter = document.getElementById('letter').value
+                        .trim().toUpperCase();
+                    crystalId = material + '_' + orientationId + letter;
                 }
 
-                const encodeIndex = n => String(n);
-                const indices = hkl.map(Number);
-                const orientationId = indices.every(n => Math.abs(n) < 10)
-                    ? indices.map(encodeIndex).join('')
-                    : indices.map(
-                        (n, i) => ['h', 'k', 'l'][i] + encodeIndex(n)
-                    ).join('_');
+                document.getElementById('crystal_id').value = crystalId;
+                document.getElementById('crystal_id_display').textContent =
+                    crystalId || 'Select material and orientation';
 
-                const shortName = [
-                    supplierId, material, orientationId, crystalId
-                ].join('_');
-                const batchName = [
-                    supplierId, material, orientationId, crystalId, charge
-                ].join('_');
+                const batchName = [supplierId, crystalId, charge]
+                    .filter(Boolean).join('_');
 
-                batchPreview.textContent = shortName;
+                batchPreview.textContent = batchName;
                 batchPreview.title = batchName;
                 preview.innerHTML = '';
 
                 for (let i = 1; i <= count; i++) {
                     const item = document.createElement('div');
                     item.className = 'preview-item';
-                    item.textContent = shortName + '_' + i;
+                    item.textContent = batchName + '_' + i;
                     item.title = batchName + '_' + i;
                     preview.appendChild(item);
                 }
@@ -1263,6 +1318,11 @@ async def index():
                 'other_material',
                 'crystal_id',
                 'charge',
+                'extended_charge',
+                'h_index',
+                'k_index',
+                'l_index',
+                'letter',
                 'count'
             ].forEach(function(id) {
                 document
@@ -1282,7 +1342,9 @@ async def index():
                     material_preset: document.getElementById('material').value === '8ysz'
                         ? '8ysz' : '',
                     crystal_id: document.getElementById('crystal_id').value,
+                    letter: document.getElementById('letter').value.trim().toUpperCase(),
                     charge: document.getElementById('charge').value,
+                    extended_charge: document.getElementById('extended_charge').value,
                     polishing: document.getElementById('polishing').value,
                     delivery_date: document.getElementById('delivery_date').value || null,
                     orientation: readIndices(['h_index', 'k_index', 'l_index']),
@@ -1331,10 +1393,18 @@ async def index():
                 document.getElementById('other_material').value = '';
                 updateMaterialFields();
                 document.getElementById('crystal_id').value = '';
+                document.getElementById('crystal_id_display').textContent =
+                    'Select material and orientation';
                 document.getElementById('charge').value = '';
+                document.getElementById('extended_charge').value = '';
+                document.getElementById('boxPhoto').value = '';
+                document.getElementById('informationSheet').value = '';
+                const pdfName = document.getElementById('informationSheetFilename');
+                if (pdfName) pdfName.textContent = '';
+                window.pdiIntakeResetBoxOcr();
                 document.getElementById('polishing').value = '';
                 document.getElementById('delivery_date').value = '';
-                ['h_index', 'k_index', 'l_index'].forEach(function(id) {
+                ['h_index', 'k_index', 'l_index', 'letter'].forEach(function(id) {
                     document.getElementById(id).value = '';
                 });
                 document.getElementById('offcut_angle').value = '';
@@ -1354,6 +1424,16 @@ async def index():
                 window.pdiIntakeResetPhysicalProperties();
                 window.pdiIntakeResetImportOrigins();
                 updatePreview();
+                for (const id of ['phys_bravais', 'phys_conductivity']) {
+                    const field = document.getElementById(id);
+                    field.value = '';
+                    delete field.dataset.pdiFieldOrigin;
+                    delete field.dataset.pdiDefaultApplied;
+                }
+                if (window.pdiIntakeApplyPhysicalDefaults) {
+                    window.pdiIntakeApplyPhysicalDefaults();
+                }
+
             }
 
             async function previewArchive() {
@@ -1383,20 +1463,101 @@ async def index():
                 }
             }
 
-            async function saveToNomad() {
-                const uploadId =
-                    document.getElementById('targetUpload').value;
-                const saveButton =
-                    document.getElementById('saveButton');
-                const saveStatus =
-                    document.getElementById('saveStatus');
+            async function verifyRawAttachment(base, filename) {
+                const response = await fetch(
+                    base + '/rawdir/' + encodeURIComponent(filename),
+                    {cache: 'no-store'}
+                );
+                const result = response.ok
+                    ? await response.json().catch(() => ({}))
+                    : {};
+                if (!response.ok || !result.file_metadata) {
+                    throw new Error(
+                        'Attachment missing in NOMAD raw files: ' + filename +
+                        ' (HTTP ' + response.status + ').'
+                    );
+                }
+            }
 
-                if (!uploadId) {
+            function selectedBatchFiles(batchLabId) {
+                const photo = document.getElementById('boxPhoto').files[0];
+                const sheet = document.getElementById('informationSheet').files[0];
+                const files = [];
+                const prefix = cleanPart(batchLabId);
+
+                if (!prefix) throw new Error('Invalid batch Lab ID.');
+
+                if (photo) {
+                    const extension = photo.name.split('.').pop().toLowerCase();
+                    if (!['jpg', 'jpeg', 'png'].includes(extension) ||
+                        (photo.type && !['image/jpeg', 'image/png'].includes(photo.type))) {
+                        throw new Error('Box photo must be JPG or PNG.');
+                    }
+                    files.push({
+                        field: 'image',
+                        file: photo,
+                        filename: prefix + '_box_photo.' + extension,
+                        mime: extension === 'png' ? 'image/png' : 'image/jpeg'
+                    });
+                }
+
+                if (sheet) {
+                    if (!sheet.name.toLowerCase().endsWith('.pdf') ||
+                        (sheet.type && sheet.type !== 'application/pdf')) {
+                        throw new Error('Information Sheet must be a PDF.');
+                    }
+                    files.push({
+                        field: 'information_sheet',
+                        file: sheet,
+                        filename: prefix + '_information_sheet.pdf',
+                        mime: 'application/pdf'
+                    });
+                }
+
+                return files;
+            }
+
+            async function saveToNomad() {
+                const uploadId = document.getElementById('targetUpload').value;
+                const saveButton = document.getElementById('saveButton');
+                const saveStatus = document.getElementById('saveStatus');
+
+                const mandatory = new Map();
+                document.querySelectorAll(
+                    'input[required], select[required], textarea[required]'
+                ).forEach(node => mandatory.set(node.id, node));
+
+                ['supplier', 'supplier_id', 'material', 'charge',
+                 'crystal_id', 'delivery_date', 'count'].forEach(id => {
+                    const node = document.getElementById(id);
+                    if (node) mandatory.set(id, node);
+                });
+
+                const missing = [];
+                if (!uploadId) missing.push('Target upload');
+
+                for (const [id, node] of mandatory) {
+                    if (node.disabled) continue;
+                    const empty = node.type === 'checkbox'
+                        ? !node.checked
+                        : !String(node.value || '').trim();
+                    if (!empty) continue;
+                    const label = document.querySelector(
+                        'label[for="' + id + '"]'
+                    );
+                    missing.push(label
+                        ? label.textContent.trim()
+                        : id.replaceAll('_', ' '));
+                }
+
+                if (missing.length) {
                     saveStatus.className = 'warning';
+                    saveStatus.style.color = '#b00020';
                     saveStatus.textContent =
-                        'Please select a target upload before saving.';
+                        'Missing required fields: ' + missing.join(', ');
                     return;
                 }
+
                 saveStatus.className = 'small';
 
                 let payload;
@@ -1427,6 +1588,7 @@ async def index():
 
                 saveButton.disabled = true;
                 saveStatus.textContent = 'Preparing archive...';
+                let assetWriteAttempted = false;
                 let batchSubmitted = false;
                 let batchWriteAttempted = false;
                 let submittedUploadId = null;
@@ -1444,8 +1606,9 @@ async def index():
                         const errorBody = await previewResponse.json().catch(
                             () => ({})
                         );
-                        throw new Error(errorBody.detail ||
-                            'Archive generation failed: ' + previewResponse.status);
+                        const detail = errorBody.detail;
+                        throw new Error(typeof detail === 'string'
+                            ? detail : JSON.stringify(detail || errorBody));
                     }
 
                     const preview = await previewResponse.json();
@@ -1476,45 +1639,21 @@ async def index():
                          throw new Error('Batch or generated child filenames collide.');
                      }
 
-                     // An indexed unpublished upload can exist even if its staging
-                     // filesystem was removed. Preflight the real raw directory
-                     // BEFORE the first PUT. This is read-only and prevents the
-                     // NOMAD StagingUploadFiles KeyError from being encountered
-                     // after starting a batch write.
+
                      const base = nomadApiBase() + '/uploads/' +
                          encodeURIComponent(uploadId);
                      const infoResponse = await fetch(base);
                      if (!infoResponse.ok) {
-                         throw new Error('Target upload is no longer accessible (' +
-                             infoResponse.status + '). Choose/create a valid development upload.');
+                         throw new Error('Selected upload is unavailable.');
                      }
                      const infoBody = await infoResponse.json();
                      const info = infoBody.data || infoBody;
-                     if (info.upload_id !== uploadId || info.published ||
-                         info.process_running) {
-                         throw new Error('Target upload is published, currently processing, '
-                             + 'or has inconsistent metadata. Select another upload.');
-                     }
-                     const directoryResponse = await fetch(base + '/rawdir/');
-                     if (!directoryResponse.ok) {
-                         throw new Error('Upload staging directory is unavailable (HTTP ' +
-                             directoryResponse.status + '). No files were sent. '
-                             + 'The upload may be stale; create a fresh unpublished '
-                             + 'development upload and refresh the list.');
-                     }
-                     const directory = await directoryResponse.json();
-                     if (!directory.directory_metadata) {
-                         throw new Error('NOMAD did not confirm upload staging directory. '
-                             + 'No files were sent.');
+                     if (info.published || info.process_running) {
+                         throw new Error(
+                             'Selected upload is published or currently processing.'
+                         );
                      }
 
-                     // The original batch normalizer creates child archives with
-                     // overwrite=True. Never require an empty target upload: instead
-                     // reject any already used generated batch/child ID or raw
-                     // archive filename BEFORE sending the batch to NOMAD.
-                     // This is a read-only, paginated check; the subsequent batch
-                     // PUT still uses overwrite_if_exists=false.
-                     saveStatus.textContent = 'Checking existing batch and substrate IDs...';
                      await window.pdiIntakeDuplicateGuard.assertNoCollision({
                          uploadId: uploadId,
                          apiBase: nomadApiBase(),
@@ -1523,32 +1662,43 @@ async def index():
                          expectedChildren: expectedChildren
                      });
 
-                     const params = new URLSearchParams();
-                     params.append('file_name', batch.filename);
-                     params.append('overwrite_if_exists', 'false');
-                     params.append('trigger_processing', 'true');
-                     params.append('wait_for_processing', 'true');
+                     const attachments = selectedBatchFiles(preview.batch_lab_id);
+                     const formData = new FormData();
+                     for (const attachment of attachments) {
+                         if (!attachment.file.size) {
+                             throw new Error('Empty attachment: ' + attachment.filename);
+                         }
+                         batch.data[attachment.field] = attachment.filename;
+                         formData.append('file', attachment.file, attachment.filename);
+                     }
+                     const batchBlob = new Blob(
+                         [JSON.stringify({data: batch.data}, null, 2)],
+                         {type: 'application/json'}
+                     );
+                     formData.append('file', batchBlob, batch.filename);
 
-                     saveStatus.textContent = 'Uploading 1 batch archive; NOMAD will generate ' +
-                         expectedChildren.length + ' SubstrateMbe entries...';
-                     // Once PUT starts, a network failure may hide a successful
-                     // server-side write. Never offer an unsafe retry.
+                     const params = new URLSearchParams({
+                         trigger_processing: 'true',
+                         overwrite_if_exists: 'false'
+                     });
+
+                     saveStatus.textContent = 'Uploading batch and attachments...';
                      batchWriteAttempted = true;
                      submittedUploadId = uploadId;
+
                      const response = await fetch(
-                         nomadApiBase() + '/uploads/' +
-                         encodeURIComponent(uploadId) + '/raw/?' + params.toString(),
+                         base + '/raw/?' + params.toString(),
                          {
                              method: 'PUT',
-                             headers: {'Content-Type': 'application/json'},
-                             body: JSON.stringify({data: batch.data}, null, 2)
+                             headers: {'Accept': 'application/json'},
+                             body: formData
                          }
                      );
                      if (!response.ok) {
-                         const errorBody = await response.json().catch(() => ({}));
-                         throw new Error('Batch upload HTTP ' + response.status + ': ' +
-                             JSON.stringify(errorBody).slice(0, 1200) +
-                             '. Inspect NOMAD before retrying to avoid overwriting children.');
+                         throw new Error(
+                             'NOMAD HTTP ' + response.status + ': ' +
+                             (await response.text()).slice(0, 1200)
+                         );
                      }
 
                     // A successful PUT is only transfer acknowledgement. The
@@ -1556,7 +1706,7 @@ async def index():
                     // read back every expected entry before reporting success.
                     batchSubmitted = true;
                     await window.pdiIntakeUploadFeedback.waitForEntries({
-                        uploadId: uploadId,
+                        uploadId: submittedUploadId,
                         apiBase: nomadApiBase(),
                         filenames: [batch.filename].concat(
                             expectedChildren.map(function(child) {
@@ -1565,6 +1715,11 @@ async def index():
                         ),
                         statusElement: saveStatus
                     });
+
+                    // Verify that processing retained every attachment.
+                    for (const attachment of attachments) {
+                        await verifyRawAttachment(base, attachment.filename);
+                    }
 
                     resetForm();
                     window.pdiIntakeUploadFeedback.showSuccessAndOpenUpload({
@@ -1575,11 +1730,16 @@ async def index():
                     });
                 } catch (error) {
                     saveStatus.className = 'warning';
+                    saveStatus.style.color = '#b00020';
                     saveStatus.textContent = batchWriteAttempted
                         ? 'An upload write was attempted; processing or refresh ' +
                           'could not be confirmed: ' + error.message +
                           ' Do NOT upload again until you inspect NOMAD. '
-                        : 'Error before upload: ' + error.message;
+                        : assetWriteAttempted
+                            ? 'An attachment upload was attempted: ' +
+                              error.message +
+                              ' Inspect NOMAD raw files before retrying. '
+                            : 'Error before upload: ' + error.message;
                     if (batchWriteAttempted && submittedUploadId) {
                         saveStatus.appendChild(document.createTextNode(
                             ' Upload ID: ' + submittedUploadId + '.'
@@ -1588,9 +1748,7 @@ async def index():
                 } finally {
                     // Never allow a second submission after the server accepted
                     // the batch: the original normalizer may overwrite children.
-                    saveButton.disabled = batchWriteAttempted || !Boolean(
-                        document.getElementById('targetUpload').value
-                    );
+                    saveButton.disabled = batchWriteAttempted;
                 }
             }
 
@@ -1730,7 +1888,142 @@ async def index():
         </script>
         <script src="static/intake_ysz_dopants.js?v=11"></script>
         <script src="static/intake_ysz_preset.js?v=12"></script>
-    </body>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const photo = document.getElementById('boxPhoto');
+    const filename = document.getElementById('boxPhotoFilename');
+    const browse = document.getElementById('browseBoxImage');
+
+    browse.addEventListener('click', function () {
+        photo.click();
+    });
+
+    const pdf = document.getElementById('informationSheet');
+    const pdfName = document.getElementById('informationSheetFilename');
+    document.getElementById('browseInformationSheet')
+        .addEventListener('click', () => pdf.click());
+    pdf.addEventListener('change', () => {
+        pdfName.textContent = pdf.files.length ? pdf.files[0].name : '';
+    });
+
+    function installDefault(id, matches) {
+        const field = document.getElementById(id);
+        const apply = () => {
+            if (field.value || field.dataset.pdiFieldOrigin) return;
+            const option = Array.from(field.options).find(option =>
+                option.value && matches(
+                    (option.value + ' ' + option.textContent).toLowerCase()
+                )
+            );
+            if (option) {
+                field.value = option.value;
+                field.dataset.pdiDefaultApplied = 'true';
+            }
+        };
+        new MutationObserver(apply).observe(
+            field, {childList: true, subtree: true}
+        );
+        return apply;
+    }
+
+    const defaultInsulating = installDefault(
+        'phys_conductivity', text => /insulat(?:ing|or)/.test(text)
+    );
+    const defaultBcc = installDefault(
+        'phys_bravais', text =>
+            /\bci\b|\bbcc\b/.test(text) ||
+            (/cubic/.test(text) && /body/.test(text) &&
+             /cent(?:er|re)/.test(text))
+    );
+    window.pdiIntakeApplyPhysicalDefaults = function () {
+        defaultInsulating();
+        defaultBcc();
+    };
+    window.pdiIntakeApplyPhysicalDefaults();
+
+    photo.addEventListener('change', function () {
+        filename.textContent = photo.files.length
+            ? photo.files[0].name : '';
+        imageDataImported = false;
+    });
+
+    const select = document.getElementById('samplePropReference');
+    let previousSelection = select.value;
+    let imageDataImported = false;
+
+    // OCR always takes priority over previously loaded references.
+    const originalImport = window.pdiIntakeApplyBoxLabelData;
+
+    if (typeof originalImport === 'function') {
+        window.pdiIntakeApplyBoxLabelData = function (data) {
+            const result = originalImport.apply(this, arguments);
+            imageDataImported = true;
+            return result;
+        };
+    }
+
+    const originalReset = window.pdiIntakeResetBoxOcr;
+
+    if (typeof originalReset === 'function') {
+        window.pdiIntakeResetBoxOcr = function () {
+            const result = originalReset.apply(this, arguments);
+            filename.textContent = '';
+            imageDataImported = false;
+            return result;
+        };
+    }
+
+    // Ask before a reference overwrites values imported by OCR.
+    document.addEventListener('change', function (event) {
+        if (event.target !== select || !select.value) return;
+
+        if (imageDataImported) {
+            const approved = window.confirm(
+                'Load data from this reference and overwrite values ' +
+                'imported from the box image?'
+            );
+
+            if (!approved) {
+                select.value = previousSelection;
+                event.stopImmediatePropagation();
+                event.preventDefault();
+                return;
+            }
+
+            window.__pdiIntakeForceReference = true;
+
+            if (typeof window.pdiIntakeResetImportOrigins === 'function') {
+                window.pdiIntakeResetImportOrigins();
+            }
+
+            window.setTimeout(function () {
+                window.__pdiIntakeForceReference = false;
+            }, 1000);
+        }
+
+        previousSelection = select.value;
+    }, true);
+
+    // Release the overwrite permission after applying the reference.
+    const originalPreview = window.updatePreview;
+
+    if (typeof originalPreview === 'function') {
+        window.updatePreview = function () {
+            const result = originalPreview.apply(this, arguments);
+
+            if (window.__pdiIntakeForceReference === true) {
+                window.__pdiIntakeForceReference = false;
+                imageDataImported = false;
+            }
+
+            return result;
+        };
+    }
+});
+</script>
+
+</body>
     </html>
     """
     # FIX: nomadApiBase() used to guess its own deployment base path

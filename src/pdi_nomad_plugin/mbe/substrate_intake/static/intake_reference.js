@@ -37,9 +37,9 @@
     // A later OCR importer can call pdiIntakeApplyBoxLabelData without
     // modifying the saved reference entry in NOMAD.
     const ownedFields = [
-        'supplier', 'supplier_id', 'material', 'other_material', 'crystal_id',
-        'charge', 'polishing', 'delivery_date',
-        'h_index', 'k_index', 'l_index', 'offcut_angle',
+        'supplier', 'supplier_id', 'material', 'other_material',
+        'charge', 'extended_charge', 'polishing', 'delivery_date',
+        'h_index', 'k_index', 'l_index', 'letter', 'offcut_angle',
         'u_index', 'v_index', 'w_index',
         'geometry_shape', 'width_mm', 'length_mm', 'radius_mm',
         'sector_angle_deg', 'thickness_mm', 'count', 'notes',
@@ -48,7 +48,8 @@
     ];
     const hasValue = node => String(node.value ?? '').trim() !== '';
     const defaultOnly = node => !node.dataset.pdiFieldOrigin &&
-        (node.id === 'geometry_shape' && node.value === 'rectangle' ||
+        (node.dataset.pdiDefaultApplied === 'true' ||
+         node.id === 'geometry_shape' && node.value === 'rectangle' ||
          node.id === 'radius_mm' && node.value === '25.4' ||
          node.id === 'sector_angle_deg' && node.value === '90');
 
@@ -70,6 +71,7 @@
     });
 
     function canApplyReference(id) {
+        if (window.__pdiIntakeForceReference === true) return true;
         const node = el(id);
         if (node.dataset.pdiFieldOrigin === 'box') return false;
         return !hasValue(node) || node.dataset.pdiFieldOrigin === 'reference' ||
@@ -139,20 +141,25 @@
             throw new Error('Box-label metadata must be an object.');
         // Existing user corrections can be revised later, but here a newly
         // recognized physical box label always overrides imported references.
-        const aliases = {supplierId: 'supplier_id', crystalId: 'crystal_id',
+        const aliases = {supplierId: 'supplier_id', extendedCharge: 'extended_charge',
             charge_id: 'charge', chemical_formula: 'material',
             batch_id: 'charge', thickness: 'thickness_mm'};
         for (const [key,value] of Object.entries(metadata)) {
             const id = aliases[key] || key;
             if (id === 'orientation' || id === 'offcut_direction' ||
-                id === 'hkl_reciprocal' || id === 'hkl_direct') {
+                id === 'hkl_reciprocal') {
                 const parsed = parseBoxIndices(value);
                 if (!parsed) throw new Error('Invalid ' + key + ' indices from box label.');
                 setTriplet(id === 'orientation' || id === 'hkl_reciprocal'
                     ? ['h_index','k_index','l_index'] : ['u_index','v_index','w_index'],
                     parsed, true);
             } else if (id === 'material') {
-                const material = String(value);
+                const labelMaterial = String(value).replace(/\s+/g, '');
+                // Documented NLLS composition: Guguschev et al.,
+                // J. Crystal Growth 536 (2020) 125526.
+                const material = /^\((?:Nd,La|La,Nd)\)\((?:Lu,Sc|Sc,Lu)\)O3$/.test(labelMaterial)
+                    ? 'La0.557Nd0.394Sc0.589Lu0.459O3'
+                    : String(value);
                 const found = Array.from(el('material').options).some(o => o.value === material);
                 boxField('material', found ? material : 'other');
                 boxField('other_material', found ? '' : material);
@@ -265,8 +272,8 @@
     function applyData(source) {
         const data = source && source.data ? source.data : source;
         if (!data || typeof data !== 'object') throw new Error('Missing archive.data');
-        // No identity, charge, supplier or batch lifecycle information is
-        // imported. Only physical properties are copied to the CURRENT form.
+        // Copy available batch properties into the current form.
+        // No archive is modified; the new Lab ID is always derived locally.
         let copied = 0;
         let kept = 0;
         function apply(id, value, select=false) {
@@ -274,6 +281,29 @@
             if ((select ? referenceSelect : referenceField)(id, value)) copied++;
             else kept++;
         }
+        apply('supplier', data.supplier);
+        apply('supplier_id', data.supplier_id);
+
+        if (data.charge_id) {
+            const charge = String(data.charge_id);
+            const parts = charge.match(/^(.+)_([^_]+)$/);
+            if (parts) {
+                apply('charge', parts[1]);
+                apply('extended_charge', parts[2]);
+            } else {
+                apply('charge', charge);
+            }
+        }
+
+        const crystalId = String(data.crystal_id || '');
+        const letter = crystalId.match(/[0-9]([A-Z])$/);
+        if (letter) apply('letter', letter[1]);
+
+        if (Number.isInteger(data.number_of_substrates) &&
+            data.number_of_substrates > 0) {
+            apply('count', data.number_of_substrates);
+        }
+
         const component = (data.components || [])[0] || {};
         const formula = component.pure_substance && component.pure_substance.molecular_formula;
         if (formula) {
@@ -302,9 +332,9 @@
         const miscut = cp.miscut && cp.miscut.cartesian_miscut &&
             cp.miscut.cartesian_miscut.reference_orientation;
         if (miscut) {
-            if (miscut.hkl_direct) {
+            if (miscut.hkl_reciprocal) {
                 if (setTriplet(['u_index','v_index','w_index'],
-                    miscut.hkl_direct,false)) copied++;
+                    miscut.hkl_reciprocal,false)) copied++;
                 else kept++;
             }
             apply('offcut_angle', miscut.angle);
@@ -364,7 +394,7 @@
 
     window.pdiIntakeLoadReferences = async function () {
         const select = el('samplePropReference');
-        const previous = references[Number(select.value)];
+        const previous = select.value ? references[Number(select.value)] : null;
         select.innerHTML = '<option value="">Loading...</option>';
         status('Searching visible NOMAD entries...');
         references = [];
@@ -377,7 +407,7 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        owner: 'visible', query: {entry_type: 'SubstrateMbe'},
+                        owner: 'visible', query: {entry_type: 'SubstrateBatchMbe'},
                         pagination: pagination, required: {data: '*', metadata: '*'}
                     })
                 });
@@ -388,8 +418,9 @@
                     const data = archive.data || {};
                     const name = String(data.lab_id || data.name ||
                         archive.metadata && archive.metadata.entry_name || '');
-                    if (/reference/i.test(name) || /reference/i.test(String(data.charge_id || '')))
+                    if (name && data && Object.keys(data).length) {
                         references.push({name: name, data: data});
+                    }
                 }
                 after = payload.pagination && payload.pagination.next_page_after_value;
                 if (!after) break;

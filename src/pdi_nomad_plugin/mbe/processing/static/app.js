@@ -333,14 +333,13 @@ function originalSubstrateFields(data) {
     const hklText = ['h_index', 'k_index', 'l_index'].every(function(k) {
         return hkl[k] !== undefined && hkl[k] !== null;
     }) ? [hkl.h_index, hkl.k_index, hkl.l_index].join(' ') : '';
-    const description = String(data.description || '');
-    const crystalMatch = description.match(/^Crystal ID:\s*(.*)$/m);
-    const chargeMatch = description.match(/^Charge ID:\s*(.*)$/m);
+    const crystalId = String(data.crystal_id || '').trim();
+    const chargeId = String(data.charge_id || '').trim();
     return {
         formula: formula,
         material: formula,
-        crystalId: crystalMatch ? crystalMatch[1].trim() : '',
-        chargeId: chargeMatch ? chargeMatch[1].trim() : '',
+        crystalId: crystalId,
+        chargeId: chargeId,
         orientation: hklText,
     };
 }
@@ -1109,6 +1108,82 @@ async function uploadArchive(uploadId, filename, data) {
     return result;
 }
 
+
+// Use original NOMAD SubstrateMbe quantities; never change sample identity.
+const PROCESSING_TAGS = Object.freeze({
+    annealing: 'annealed',
+    cleaning: 'cleaned',
+    backside_coating: 'backcoated'
+});
+
+async function updateSubstrateProcessTags(selected, definitions) {
+    const newTags = [...new Set(definitions.map(definition => {
+        const tag = PROCESSING_TAGS[definition.type];
+        if (!tag) {
+            throw new Error('Unsupported processing tag: ' + definition.type);
+        }
+        return tag;
+    }))];
+
+    for (const substrate of selected) {
+        const original = await cutReadArchive(substrate.entryId);
+        if (original.m_def !== 'pdi_nomad_plugin.mbe.materials.SubstrateMbe' ||
+            original.lab_id !== substrate.labId) {
+            throw new Error('Substrate identity mismatch: ' + substrate.labId);
+        }
+        if (original.tags != null && !Array.isArray(original.tags)) {
+            throw new Error('Unexpected tags format: ' + substrate.labId);
+        }
+
+        const existing = original.tags || [];
+        const tags = [...new Set([...existing, 'processed', ...newTags])];
+        const changes = [];
+
+        if (original.processed !== true) {
+            changes.push({
+                path: 'data/processed', action: 'upsert', new_value: true
+            });
+        }
+        if (tags.length !== existing.length ||
+            tags.some((tag, i) => tag !== existing[i])) {
+            changes.push({
+                path: 'data/tags', action: 'upsert', new_value: tags
+            });
+        }
+
+        if (changes.length) {
+            const response = await fetch(
+                nomadApiBase() + '/entries/' +
+                encodeURIComponent(substrate.entryId) + '/edit',
+                {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({changes})
+                }
+            );
+            if (!response.ok) {
+                const detail = await response.text().catch(() => '');
+                throw new Error(
+                    substrate.labId + ': edit HTTP ' + response.status +
+                    ' ' + detail.slice(0, 500)
+                );
+            }
+            const result = await response.json();
+            if (result.entry_id !== substrate.entryId) {
+                throw new Error('Unexpected edited entry: ' + substrate.labId);
+            }
+        }
+
+        const verified = await cutReadArchive(substrate.entryId);
+        if (verified.lab_id !== substrate.labId ||
+            verified.processed !== true ||
+            !tags.every(tag => (verified.tags || []).includes(tag))) {
+            throw new Error('Tag verification failed: ' + substrate.labId);
+        }
+    }
+}
+
+
 function resetProcessingAfterSuccess(entryIds) {
     const completed = new Set(entryIds);
 
@@ -1246,6 +1321,15 @@ async function saveProcesses() {
             }
         }
         if (indexed) {
+            try {
+                await updateSubstrateProcessTags(selected, definitions);
+            } catch (error) {
+                throw new Error(
+                    'Process entries are already saved. Substrate tagging ' +
+                    'is incomplete: ' + error.message +
+                    '. Do NOT upload the processes again.'
+                );
+            }
             resetProcessingAfterSuccess(
                 selected.map(function(item) { return item.entryId; })
             );
