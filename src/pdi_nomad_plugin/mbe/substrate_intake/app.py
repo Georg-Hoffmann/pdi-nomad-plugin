@@ -121,12 +121,11 @@ def safe_id_part(value: str) -> str:
 
 def derived_crystal_id(material: str, orientation: dict, letter: str = '') -> str:
     indices = [orientation[k] for k in ('h_index', 'k_index', 'l_index')]
-    if all(abs(n) < 10 for n in indices):
+    single_digit_limit = 10
+    if all(abs(n) < single_digit_limit for n in indices):
         hkl = ''.join(str(n) for n in indices)
     else:
-        hkl = '_'.join(
-            f'{axis}{n}' for axis, n in zip('hkl', indices)
-        )
+        hkl = '_'.join(f'{axis}{n}' for axis, n in zip('hkl', indices))
     material_id = safe_id_part(material)
     if not material_id:
         raise ValueError('Material is required for Crystal ID.')
