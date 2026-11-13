@@ -110,43 +110,100 @@
             </div>
 
             <div id="insertFields" class="editor-section hidden">
-                <div class="field-grid three">
-                    <div>
-                        <label for="insertFamily">Insert family</label>
-                        <select id="insertFamily">
-                            <option value="XPS">XPS</option>
-                            <option value="MBE">MBE</option>
-                            <option value="CUSTOM">Other</option>
-                        </select>
-                    </div>
-                    <div id="insertFamilyCustomWrap" class="hidden">
-                        <label for="insertFamilyCustom">Custom family code</label>
-                        <input id="insertFamilyCustom" type="text" maxlength="12" placeholder="A-Z / 0-9">
-                    </div>
-                    <div>
-                        <label for="insertNumber">Insert number</label>
-                        <input id="insertNumber" type="number" step="1" min="1" max="999">
-                    </div>
-                    <div>
-                        <label for="insertOuterSize">Outer size</label>
-                        <select id="insertOuterSize"></select>
-                    </div>
-                    <div id="insertOuterCustomWrap" class="hidden">
-                        <label for="insertOuterCustom">Custom outer size (mm)</label>
-                        <input id="insertOuterCustom" type="number" step="0.1" min="0.1">
-                    </div>
-                    <div>
-                        <label for="insertInnerSize">Sample opening size</label>
-                        <select id="insertInnerSize"></select>
-                    </div>
-                    <div id="insertInnerCustomWrap" class="hidden">
-                        <label for="insertInnerCustom">Custom opening size (mm)</label>
-                        <input id="insertInnerCustom" type="number" step="0.1" min="0.1">
-                    </div>
-                </div>
-            </div>
+    <style>
+        #insertFields .insert-identity-grid,
+        #insertFields .insert-geometry-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+        #insertFields .insert-identity-grid {
+            margin-bottom: 20px;
+        }
+        #insertFields .insert-geometry-card {
+            border: 1px solid #ccd9e8;
+            border-radius: 10px;
+            padding: 16px;
+            min-width: 0;
+        }
+        #insertFields .insert-geometry-card h3 {
+            margin: 0 0 14px;
+            font-size: 16px;
+        }
+        #insertFields .insert-geometry-card > div {
+            margin-top: 12px;
+        }
+        #insertFields [id$="GeometryExtras"] {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+        #insertFields [data-kind="height"] {
+            grid-column: 1 / -1;
+        }
+        #insertFields input,
+        #insertFields select {
+            width: 100%;
+            box-sizing: border-box;
+        }
+        @media (max-width: 760px) {
+            #insertFields .insert-identity-grid,
+            #insertFields .insert-geometry-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
 
-            <div id="targetUploadFields">
+    <div class="insert-identity-grid">
+        <div>
+            <label for="insertFamily">Insert family</label>
+            <select id="insertFamily">
+                <option value="XPS">XPS</option>
+                <option value="MBE">MBE</option>
+                <option value="CUSTOM">Other</option>
+            </select>
+        </div>
+        <div>
+            <label for="insertNumber">Insert number</label>
+            <input id="insertNumber" type="number" step="1" min="1" max="999">
+        </div>
+        <div id="insertFamilyCustomWrap" class="hidden">
+            <label for="insertFamilyCustom">Custom family code</label>
+            <input id="insertFamilyCustom" type="text" maxlength="12"
+                   placeholder="A-Z / 0-9">
+        </div>
+    </div>
+
+    <div class="insert-geometry-grid">
+        <section class="insert-geometry-card">
+            <h3>Outer geometry</h3>
+            <div>
+                <label for="insertOuterSize">Square size (mm)</label>
+                <select id="insertOuterSize"></select>
+            </div>
+            <div id="insertOuterCustomWrap" class="hidden">
+                <label for="insertOuterCustom">Custom square size (mm)</label>
+                <input id="insertOuterCustom" type="number"
+                       step="any" min="0.001">
+            </div>
+        </section>
+
+        <section class="insert-geometry-card">
+            <h3>Inner geometry / Sample opening</h3>
+            <div>
+                <label for="insertInnerSize">Square size (mm)</label>
+                <select id="insertInnerSize"></select>
+            </div>
+            <div id="insertInnerCustomWrap" class="hidden">
+                <label for="insertInnerCustom">Custom square size (mm)</label>
+                <input id="insertInnerCustom" type="number"
+                       step="any" min="0.001">
+            </div>
+        </section>
+    </div>
+</div>
+
+<div id="targetUploadFields">
                 <label for="targetUpload">Target upload</label>
                 <select id="targetUpload"><option value="">Loading uploads...</option></select>
                 <div id="uploadStatus" class="status">Loading writable NOMAD uploads...</div>

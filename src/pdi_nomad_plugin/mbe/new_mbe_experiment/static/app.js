@@ -45,7 +45,8 @@ async function loadTreatmentHistoryEntries() {
     const definitions = [
         {type:'cleaning', label:'Cleaning', processSchema:'nomad_material_processing.general.Cleaning', recipeSchema:'nomad_material_processing.general.CleaningRecipe'},
         {type:'annealing', label:'Annealing', processSchema:'nomad_material_processing.general.Annealing', recipeSchema:'nomad_material_processing.general.AnnealingRecipe'},
-        {type:'etching', label:'Etching', processSchema:'nomad_material_processing.general.Etching', recipeSchema:'nomad_material_processing.general.EtchingRecipe'}
+        {type:'etching', label:'Etching', processSchema:'nomad_material_processing.general.Etching', recipeSchema:'nomad_material_processing.general.EtchingRecipe'},
+        {type:'backside_coating', label:'Backside Coating', processSchema:'pdi_nomad_plugin.general.schema.BackSideCoatingPDI', recipeSchema:'pdi_nomad_plugin.general.schema.BackSideCoatingRecipePDI'}
     ];
     const treatments = [];
     for (const definition of definitions) {
@@ -374,8 +375,16 @@ function filteredSubstrates() {
         ).value;
 
 
+    const backcoatingFilter =
+        document.getElementById('filterBackcoating').value;
+
     return substrateCatalogState.filter(
         function(substrate) {
+                if (backcoatingFilter === 'yes' && !substrate.backCoated)
+                    return false;
+                if (backcoatingFilter === 'no' && substrate.backCoated)
+                    return false;
+
 
             // Grown substrates cannot be assigned to a new MBE holder.
             if (substrate.grown || cutParents.has(substrate.entryId)) return false;
@@ -879,6 +888,8 @@ async function initialiseSubstrates() {
                 processed:data.processed === true,
                 grown:data.grown === true ||
                     (Array.isArray(data.tags) && data.tags.includes('grown')),
+                backCoated:Array.isArray(data.tags) &&
+                    data.tags.includes('backcoated'),
                 geometry:data.geometry || null
             };
         });
@@ -893,6 +904,9 @@ async function initialiseSubstrates() {
 
 
 function initialiseSubstrateFilterEvents() {
+    document.getElementById('filterBackcoating')
+        .addEventListener('change', renderSubstrateResults);
+
 
     document.getElementById(
         'substrateSearch'
@@ -3684,7 +3698,32 @@ function geometryXY(geometry) {
 
 
 function positionSlotGeometry(position) {
-    return position ? position.slotGeometry || null : null;
+    const explicit = position?.slotGeometry || null;
+    if (substrateFootprint(explicit)) return explicit;
+
+    // The original holder's generated Lab-ID records the square slot size.
+    // Use only the documented 10/20 mm rectangular holder conventions.
+    // This is a read-only derivation, never written into the NOMAD archive.
+    const holder = experimentState.holder || {};
+    const identifiers = [
+        holder.labId, holder.lab_id, holder.id,
+        holder.name, holder.data?.lab_id
+    ];
+
+    for (const identifier of identifiers) {
+        const match = String(identifier || '').trim()
+            .match(/^[HM][1-9]\\d*_(10|20)$/);
+        if (match) {
+            const side = Number(match[1]) / 1000;
+            return {
+                m_def: 'nomad_material_processing.general.SquareCuboid',
+                width: side,
+                length: side
+            };
+        }
+    }
+
+    return null; // Unknown geometry remains blocked.
 }
 
 
@@ -3735,7 +3774,7 @@ function insertFitsPosition(insert, position) {
     if (!substrateFootprint(insert.innerGeometry)) return false;
     if (!geometryFits(insert.innerGeometry, insert.outerGeometry)) return false;
     return !position.substrate ||
-        geometryFits(position.substrate.geometry, insert.innerGeometry);
+        geometryMatches(position.substrate.geometry, insert.innerGeometry);
 }
 
 function substrateFitsPosition(substrate, position) {
@@ -3756,9 +3795,8 @@ function substrateFitsPosition(substrate, position) {
 
     // Direct holder slots require matching dimensions.
     // Insert openings retain their existing fit validation.
-    return position.insertReduction
-        ? geometryFits(substrate.geometry, target)
-        : geometryMatches(substrate.geometry, target);
+    // A substrate must match the opening, also when an insert is used.
+    return geometryMatches(substrate.geometry, target);
 }
 
 
@@ -3936,7 +3974,24 @@ function renderHolder() {
 
         option.disabled = !insertFitsPosition(insert, position);
         if (option.disabled) {
-            option.textContent += ' (geometry not verified)';
+            const slot = positionSlotGeometry(position);
+            let reason = 'geometry not verified';
+            if (!substrateFootprint(slot)) {
+                reason = 'holder slot geometry missing';
+            } else if (!substrateFootprint(insert.outerGeometry)) {
+                reason = 'insert outer geometry missing';
+            } else if (!geometryMatches(insert.outerGeometry, slot)) {
+                reason = 'outer dimensions do not match holder slot';
+            } else if (!substrateFootprint(insert.innerGeometry)) {
+                reason = 'insert opening geometry missing';
+            } else if (!geometryFits(insert.innerGeometry, insert.outerGeometry)) {
+                reason = 'insert opening exceeds outer dimensions';
+            } else if (position.substrate &&
+                       !geometryMatches(position.substrate.geometry,
+                                        insert.innerGeometry)) {
+                reason = 'substrate and opening dimensions differ';
+            }
+            option.textContent += ' (' + reason + ')';
         }
         insertSelect.appendChild(option);
     });
@@ -4880,17 +4935,138 @@ async function markFilledHolderGrownInNomad(filled, writer) {
 }
 
 
+function loadedFilledAssignmentsMatch(savedPositions) {
+    if (!Array.isArray(savedPositions)) return false;
+    const local = experimentState.positions || {};
+    const seen = new Set();
+
+    for (const saved of savedPositions) {
+        if (!saved || !saved.name || seen.has(saved.name) ||
+            !Object.prototype.hasOwnProperty.call(local, saved.name)) {
+            return false;
+        }
+        seen.add(saved.name);
+        const current = local[saved.name] || {};
+        const substrateId = entryIdFromReference(
+            referenceValue(saved.substrate)
+        ) || null;
+        const insertId = entryIdFromReference(
+            referenceValue(saved.insert_reduction)
+        ) || null;
+        const usage = saved.position_usage ||
+            (substrateId ? 'substrate' : null);
+
+        if ((current.substrate?.entryId || null) !== substrateId ||
+            (current.insertReduction?.entryId || null) !== insertId ||
+            (current.position_usage || null) !== usage) {
+            return false;
+        }
+    }
+
+    return Object.entries(local).every(([name, position]) =>
+        seen.has(name) ||
+        !(position.position_usage || position.substrate ||
+          position.insertReduction)
+    );
+}
+
+async function confirmedFilledHolderForExperiment(uploadId) {
+    const holder = experimentState.holder;
+    if (!holder?.entryId) {
+        throw new Error('No physical holder selected.');
+    }
+
+    const loaded = holder.filledHolder;
+    let filled = experimentState.savedFilledHolder;
+
+    if (loaded && (!filled || filled.entryId !== loaded.entryId)) {
+        if (holder.workflowStatus !== 'filled') {
+            throw new Error(
+                'The physical holder is not in the filled state.'
+            );
+        }
+
+        const catalogEntry = (holderCatalogState?.filled || []).find(
+            item => item.entry_id === loaded.entryId
+        );
+        const storedUpload = loaded.uploadId ||
+            catalogEntry?.upload_id || '';
+
+        if (!loaded.entryId || !storedUpload) {
+            throw new Error('Saved Filled Holder identity is incomplete.');
+        }
+        if (storedUpload !== uploadId) {
+            throw new Error(
+                'The existing Filled Holder belongs to a different upload. ' +
+                'Select its original target upload; do not save it again.'
+            );
+        }
+        if (loaded.published) {
+            throw new Error(
+                'The existing Filled Holder is published and cannot be ' +
+                'updated by this experiment workflow.'
+            );
+        }
+
+        // Read the existing NOMAD archive. Never create a second holder.
+        const archive = await newMbeWriter().getArchive(loaded.entryId);
+        const data = archive.data || {};
+
+        if (data.m_def !==
+            'pdi_nomad_plugin.mbe.instrument.FilledSubstrateHolderPDI') {
+            throw new Error('Saved entry is not a FilledSubstrateHolderPDI.');
+        }
+        if (entryIdFromReference(filledPhysicalReference(data)) !==
+            holder.entryId) {
+            throw new Error(
+                'Saved Filled Holder references a different physical holder.'
+            );
+        }
+        if (!loadedFilledAssignmentsMatch(data.positions)) {
+            throw new Error(
+                'Saved loadout differs from the displayed holder assignments. ' +
+                'No upload performed.'
+            );
+        }
+
+        filled = {
+            entryId: loaded.entryId,
+            uploadId: storedUpload,
+            filename: loaded.mainfile || catalogEntry?.mainfile || '',
+            reference: window.NomadMbeWriter.ref(
+                storedUpload, loaded.entryId
+            ),
+            fingerprint: currentLoadoutFingerprint()
+        };
+        experimentState.savedFilledHolder = filled;
+    }
+
+    if (!filled) {
+        throw new Error(
+            'No verified saved Filled Holder is available. ' +
+            'Do not create a duplicate.'
+        );
+    }
+    if (filled.uploadId !== uploadId) {
+        throw new Error('Target upload differs from the saved Filled Holder.');
+    }
+    if (filled.fingerprint !== currentLoadoutFingerprint()) {
+        throw new Error(
+            'Holder assignments have changed since saving. ' +
+            'The existing archive will not be overwritten.'
+        );
+    }
+    return filled;
+}
+
 async function saveExperimentToNomad() {
     const button = document.getElementById('saveExperimentButton');
     const status = document.getElementById('experimentSaveStatus');
     if (button) button.disabled = true;
     try {
         const uploadId = selectedWritableUpload();
-        const filled = experimentState.savedFilledHolder;
-        if (!filled || filled.uploadId !== uploadId ||
-            filled.fingerprint !== currentLoadoutFingerprint()) {
-            throw new Error('Save the current filled holder first. The holder assignments must not change afterwards.');
-        }
+        const filled =
+            await confirmedFilledHolderForExperiment(uploadId);
         const processingHistory = await captureProcessingHistory(
             filled, newMbeWriter()
         );

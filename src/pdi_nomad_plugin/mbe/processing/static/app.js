@@ -894,7 +894,7 @@ function addProcess() {
         <div class="process-summary"><div><div class="process-title">Process ${processCounter}</div><div class="process-meta">Cleaning</div></div><div>⌄</div></div>
         <div class="process-body">
             <div class="process-fields">
-                <div><label>Process type</label><select class="process-type">${options}</select></div>
+                <div><label>Treatment</label><select class="process-type">${options}</select></div>
                 <div>
                     <label>Process start date *</label>
                     <div style="display:flex;gap:8px;align-items:center;">
@@ -2624,10 +2624,18 @@ function initializeProcessChoiceButtons() {
     // Show Sample Cut above the "Add another process" button.
     add.parentNode.insertBefore(cutPanel, add);
 
-    bar.querySelectorAll('[data-process-choice]').forEach(function(button) {
-        button.addEventListener('click', function() {
-            const type = button.dataset.processChoice;
+    // All recipe-based processes use the same process-card workflow.
+    bar.addEventListener('click', function(event) {
+        const button = event.target.closest('[data-process-choice]');
+        if (!button || !bar.contains(button)) return;
 
+        event.preventDefault();
+        const choice = button.dataset.processChoice;
+            const type = choice === 'sample_treatment'
+                ? 'cleaning'
+                : choice;
+
+        try {
             if (type === 'sample_cut') {
                 if (cutPanel.style.display === 'none') {
                     oldCut.click();
@@ -2636,15 +2644,27 @@ function initializeProcessChoiceButtons() {
                     behavior: 'smooth',
                     block: 'nearest'
                 });
-            } else if (type === 'cleaning' || type === 'annealing') {
+            } else {
+                if (!recipeSchemas[type] ||
+                    !['cleaning', 'annealing', 'backside_coating'].includes(type)) {
+                    throw new Error(
+                        'Process type not available in recipe catalog: ' + type
+                    );
+                }
+
                 addProcess();
 
                 const cards = list.querySelectorAll('.process-card');
                 const card = cards[cards.length - 1];
                 const select = card?.querySelector('.process-type');
 
-                if (!select) {
-                    throw new Error('New process card was not created.');
+                if (!select ||
+                    !Array.from(select.options).some(
+                        option => option.value === type
+                    )) {
+                    throw new Error(
+                        'Process card cannot select type: ' + type
+                    );
                 }
 
                 select.value = type;
@@ -2652,17 +2672,23 @@ function initializeProcessChoiceButtons() {
                     bubbles: true
                 }));
 
+                card.classList.add('open');
+                collapseOthers(card);
                 card.scrollIntoView({
                     behavior: 'smooth',
                     block: 'nearest'
                 });
-            } else {
-                throw new Error('Unsupported process type: ' + type);
             }
 
             bar.style.display = 'none';
-        });
+        } catch (error) {
+            const status = document.getElementById('processStatus');
+            if (status) status.textContent = 'Error: ' + error.message;
+            console.error('Process selection failed:', error);
+            window.alert('Process selection failed: ' + error.message);
+        }
     });
+
 
     add.addEventListener('click', function() {
         add.insertAdjacentElement('afterend', bar);

@@ -934,12 +934,12 @@ async def index():
         <pre id="boxOcrRawText"></pre>
     </div>
 
-    <label for="informationSheet">Information Sheet (PDF)</label>
+    <label for="informationSheet">Information Sheet</label>
                         <button id="browseInformationSheet" type="button"
-                            class="secondary">Choose PDF</button>
+                            class="secondary">Choose File</button>
                         <span id="informationSheetFilename" class="small"></span>
                         <input id="informationSheet" type="file"
-                            accept=".pdf,application/pdf" style="display:none">
+                            accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" style="display:none">
                         <p class="small">
                             Files are stored once per batch in NOMAD.
                             All generated substrates reference the same files.
@@ -1398,6 +1398,7 @@ async def index():
                 document.getElementById('extended_charge').value = '';
                 document.getElementById('boxPhoto').value = '';
                 document.getElementById('informationSheet').value = '';
+                window.pdiIntakeClearAttachments?.();
                 const pdfName = document.getElementById('informationSheetFilename');
                 if (pdfName) pdfName.textContent = '';
                 window.pdiIntakeResetBoxOcr();
@@ -1479,37 +1480,89 @@ async def index():
             }
 
             function selectedBatchFiles(batchLabId) {
-                const photo = document.getElementById('boxPhoto').files[0];
-                const sheet = document.getElementById('informationSheet').files[0];
                 const files = [];
                 const prefix = cleanPart(batchLabId);
 
-                if (!prefix) throw new Error('Invalid batch Lab ID.');
-
-                if (photo) {
-                    const extension = photo.name.split('.').pop().toLowerCase();
-                    if (!['jpg', 'jpeg', 'png'].includes(extension) ||
-                        (photo.type && !['image/jpeg', 'image/png'].includes(photo.type))) {
-                        throw new Error('Box photo must be JPG or PNG.');
-                    }
-                    files.push({
-                        field: 'image',
-                        file: photo,
-                        filename: prefix + '_box_photo.' + extension,
-                        mime: extension === 'png' ? 'image/png' : 'image/jpeg'
-                    });
+                if (!prefix) {
+                    throw new Error('Invalid batch Lab ID.');
                 }
 
-                if (sheet) {
-                    if (!sheet.name.toLowerCase().endsWith('.pdf') ||
-                        (sheet.type && sheet.type !== 'application/pdf')) {
-                        throw new Error('Information Sheet must be a PDF.');
-                    }
-                    files.push({
+                const categories = [
+                    {
+                        id: 'boxPhoto',
+                        field: 'image',
+                        stem: 'box_photo',
+                        extensions: ['jpg', 'jpeg', 'png']
+                    },
+                    {
+                        id: 'informationSheet',
                         field: 'information_sheet',
-                        file: sheet,
-                        filename: prefix + '_information_sheet.pdf',
-                        mime: 'application/pdf'
+                        stem: 'information_sheet',
+                        extensions: ['pdf', 'jpg', 'jpeg', 'png']
+                    }
+                ];
+
+                for (const category of categories) {
+                    const selected = Array.from(
+                        document.getElementById(category.id).files
+                    );
+
+                    selected.forEach((file, index) => {
+                        const ext = file.name
+                            .split('.').pop().toLowerCase();
+
+                        const mime = ext === 'pdf'
+                            ? 'application/pdf'
+                            : ext === 'png'
+                                ? 'image/png'
+                                : 'image/jpeg';
+
+                        if (
+                            !category.extensions.includes(ext) ||
+                            (file.type && file.type !== mime) ||
+                            !file.size
+                        ) {
+                            throw new Error(
+                                'Invalid attachment: ' + file.name
+                            );
+                        }
+
+                        // Preserve the original filename in NOMAD.
+                        const originalName = file.name;
+
+                        if (
+                            !originalName.trim() ||
+                            originalName === '.' ||
+                            originalName === '..' ||
+                            originalName.includes('/') ||
+                            originalName.includes(String.fromCharCode(92)) ||
+                            [...originalName].some(char =>
+                                char.charCodeAt(0) < 32 ||
+                                char.charCodeAt(0) === 127
+                            )
+                        ) {
+                            throw new Error(
+                                'Invalid attachment filename: ' + originalName
+                            );
+                        }
+
+                        if (files.some(item =>
+                            item.filename.toLowerCase() ===
+                            originalName.toLowerCase()
+                        )) {
+                            throw new Error(
+                                'Duplicate attachment filename: ' +
+                                originalName
+                            );
+                        }
+
+                        files.push({
+                            field: category.field,
+                            file: file,
+                            filename: prefix + '_' + category.stem + '_' + String(index + 1).padStart(2, '0') + '_' + originalName,
+                            mime: mime,
+                            primary: index === 0
+                        });
                     });
                 }
 
@@ -1662,14 +1715,80 @@ async def index():
                      });
 
                      const attachments = selectedBatchFiles(preview.batch_lab_id);
+                     const manifestFilename = cleanPart(preview.batch_lab_id) + '_attachments.json';
                      const formData = new FormData();
                      for (const attachment of attachments) {
                          if (!attachment.file.size) {
                              throw new Error('Empty attachment: ' + attachment.filename);
                          }
-                         batch.data[attachment.field] = attachment.filename;
+                         if (attachment.primary) {
+                             batch.data[attachment.field] = attachment.filename;
+                         }
                          formData.append('file', attachment.file, attachment.filename);
                      }
+                     const manifest = {
+                         format: 'pdi-substrate-attachments-v1',
+                         batch_lab_id: preview.batch_lab_id,
+                         upload_id: uploadId,
+                         batch_archive: batch.filename,
+                         attachments: attachments.map(item => ({
+                             role: item.field,
+                             main: item.primary,
+                             original_filename: item.file.name,
+                             stored_filename: item.filename,
+                             mime_type: item.mime,
+                             size_bytes: item.file.size
+                         }))
+                     };
+
+                     const allNames = [
+                         batch.filename,
+                         manifestFilename,
+                         ...attachments.map(item => item.filename),
+                         ...expectedChildren.map(item => item.filename)
+                     ];
+
+                     if (new Set(allNames.map(x => x.toLowerCase())).size !==
+                         allNames.length) {
+                         throw new Error('Upload filename collision.');
+                     }
+
+                     for (const name of allNames) {
+                         if (new TextEncoder().encode(name).length > 255) {
+                             throw new Error(
+                                 'Filename exceeds 255 bytes: ' + name
+                             );
+                         }
+                     }
+
+                     for (const name of [
+                         manifestFilename,
+                         ...attachments.map(item => item.filename)
+                     ]) {
+                         const response = await fetch(
+                             base + '/rawdir/' + encodeURIComponent(name),
+                             {cache: 'no-store'}
+                         );
+                         if (response.ok) {
+                             throw new Error('File already exists: ' + name);
+                         }
+                         if (response.status !== 404) {
+                             throw new Error(
+                                 'Cannot check filename: ' + name +
+                                 ' (HTTP ' + response.status + ')'
+                             );
+                         }
+                     }
+
+                     formData.append(
+                         'file',
+                         new Blob(
+                             [JSON.stringify(manifest, null, 2)],
+                             {type: 'application/json'}
+                         ),
+                         manifestFilename
+                     );
+
                      const batchBlob = new Blob(
                          [JSON.stringify({data: batch.data}, null, 2)],
                          {type: 'application/json'}
@@ -1719,6 +1838,7 @@ async def index():
                     for (const attachment of attachments) {
                         await verifyRawAttachment(base, attachment.filename);
                     }
+                    await verifyRawAttachment(base, manifestFilename);
 
                     resetForm();
                     window.pdiIntakeUploadFeedback.showSuccessAndOpenUpload({
@@ -1950,6 +2070,346 @@ document.addEventListener('DOMContentLoaded', function () {
     const select = document.getElementById('samplePropReference');
     let previousSelection = select.value;
     let imageDataImported = false;
+
+
+    // Multiple files per attachment category.
+    // The first file is the primary NOMAD archive reference.
+    function installIntakeAttachmentDropZone(
+        input, button, filenameElement, label, extensions
+    ) {
+        const zone = document.createElement('div');
+        zone.className = 'pdi-attachment-drop-zone';
+        zone.setAttribute('role', 'group');
+        zone.setAttribute('aria-label', label);
+        zone.style.cssText =
+            'border:2px dashed #8798ac;border-radius:12px;' +
+            'padding:18px 14px;margin:12px 0 18px;' +
+            'min-height:120px;box-sizing:border-box;' +
+            'display:flex;flex-direction:column;' +
+            'align-items:center;gap:10px;text-align:center;';
+
+        const hint = document.createElement('div');
+        hint.textContent = label + ' (multiple files allowed)';
+
+        const list = document.createElement('div');
+        list.style.cssText = 'width:100%;text-align:left;';
+
+        button.parentNode.insertBefore(zone, button);
+        zone.append(hint, button, filenameElement, input, list);
+
+        filenameElement.style.overflowWrap = 'anywhere';
+        input.multiple = true;
+
+        let selected = Array.from(input.files);
+        let activeSelection = null;
+        let displayOrder = Array.from(input.files);
+        let internal = false;
+
+        const isImage = input === photo;
+        const mimeTypes = isImage
+            ? ['image/jpeg', 'image/png']
+            : ['application/pdf', 'image/jpeg', 'image/png'];
+
+        function renderList() {
+            list.replaceChildren();
+
+            // Keep file rows in their original visual positions.
+            displayOrder = displayOrder.filter(
+                file => selected.includes(file)
+            );
+            for (const file of selected) {
+                if (!displayOrder.includes(file)) {
+                    displayOrder.push(file);
+                }
+            }
+
+            if (!selected.includes(activeSelection)) {
+                activeSelection = null;
+            }
+
+            for (const file of displayOrder) {
+                const isMain = selected[0] === file;
+                const isSelected = activeSelection === file;
+
+                const row = document.createElement('div');
+                row.setAttribute('role', 'button');
+                row.setAttribute('aria-pressed', String(isSelected));
+                row.tabIndex = 0;
+
+                row.style.cssText =
+                    'display:flex;flex-direction:column;gap:4px;' +
+                    'margin:6px 0;padding:10px;border-radius:8px;' +
+                    'border:2px solid ' +
+                    (isSelected ? '#287ac0' : '#c5cbd2') + ';' +
+                    'background:' +
+                    (isSelected ? 'rgba(40,122,192,0.14)' : 'transparent') + ';' +
+                    'cursor:pointer;text-align:left;';
+
+                const name = document.createElement('span');
+                name.textContent = file.name;
+                name.style.cssText =
+                    'font-weight:' + (isMain ? '600' : '400') + ';' +
+                    'overflow-wrap:anywhere;';
+                row.appendChild(name);
+
+                if (isMain) {
+                    const label = document.createElement('span');
+                    label.textContent = isImage
+                        ? 'MAIN IMAGE · OCR'
+                        : 'MAIN SHEET';
+                    label.style.cssText =
+                        'font-size:11px;font-weight:700;color:#287ac0;';
+                    row.appendChild(label);
+                }
+
+                function choose() {
+                    activeSelection = file;
+                    renderList();
+                }
+
+                row.addEventListener('click', choose);
+                row.addEventListener('keydown', event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        choose();
+                    }
+                });
+
+                list.appendChild(row);
+            }
+
+            // Fixed action area BELOW ALL file rows.
+            const actions = document.createElement('div');
+            actions.style.cssText =
+                'display:flex;gap:8px;flex-wrap:wrap;' +
+                'margin:14px 0 4px;';
+
+            const mainButton = document.createElement('button');
+            mainButton.type = 'button';
+            mainButton.className = 'secondary';
+            mainButton.textContent = isImage
+                ? 'Set as Main Image'
+                : 'Set as Main Sheet';
+            mainButton.disabled =
+                !activeSelection || activeSelection === selected[0];
+
+            mainButton.addEventListener('click', () => {
+                const index = selected.indexOf(activeSelection);
+                if (index < 0) return;
+
+                selected.splice(index, 1);
+                selected.unshift(activeSelection);
+                sync(true);
+            });
+
+            const deleteButton = document.createElement('button');
+            deleteButton.type = 'button';
+            deleteButton.className = 'secondary';
+            deleteButton.textContent = isImage
+                ? 'Delete Image'
+                : 'Delete File';
+            deleteButton.disabled = !activeSelection;
+
+            deleteButton.addEventListener('click', () => {
+                const index = selected.indexOf(activeSelection);
+                if (index < 0) return;
+
+                selected.splice(index, 1);
+                activeSelection = null;
+                sync(true);
+            });
+
+            actions.append(mainButton, deleteButton);
+            list.appendChild(actions);
+        }
+
+        function sync(emitChange) {
+            const transfer = new DataTransfer();
+
+            selected.forEach(file => {
+                transfer.items.add(file);
+            });
+
+            input.files = transfer.files;
+
+            if (emitChange) {
+                internal = true;
+                try {
+                    input.dispatchEvent(
+                        new Event('change', {bubbles: true})
+                    );
+                } finally {
+                    internal = false;
+                }
+            }
+
+            renderList();
+
+            if (isImage && !selected.length) {
+                const preview =
+                    document.getElementById('boxPhotoPreview');
+
+                if (preview) {
+                    preview.removeAttribute('src');
+                    preview.style.display = 'none';
+                }
+
+                const extract =
+                    document.getElementById('extractBoxData');
+
+                if (extract) extract.disabled = true;
+
+                const status =
+                    document.getElementById('boxOcrStatus');
+
+                if (status) status.textContent = '';
+            }
+        }
+
+        function addFiles(files, emitChange) {
+            if (!files.length) return;
+
+            for (const file of files) {
+                const ext = '.' +
+                    file.name.split('.').pop().toLowerCase();
+
+                if (
+                    !extensions.includes(ext) ||
+                    (file.type && !mimeTypes.includes(file.type)) ||
+                    !file.size
+                ) {
+                    throw new Error(
+                        'Unsupported or empty file: ' + file.name
+                    );
+                }
+            }
+
+            for (const file of files) {
+                const exists = selected.some(old =>
+                    old.name === file.name &&
+                    old.size === file.size &&
+                    old.lastModified === file.lastModified
+                );
+
+                if (!exists) selected.push(file);
+            }
+
+            sync(emitChange);
+        }
+
+        // The native picker replaces its own selection.
+        // Capture the change before other handlers and merge files.
+        input.addEventListener('change', () => {
+            if (internal) return;
+
+            try {
+                addFiles(Array.from(input.files), false);
+            } catch (error) {
+                sync(false);
+                window.alert(error.message);
+            }
+        }, true);
+
+        zone.addEventListener('dragover', event => {
+            event.preventDefault();
+
+            if (event.dataTransfer) {
+                event.dataTransfer.dropEffect = 'copy';
+            }
+
+            zone.style.borderColor = '#287ac0';
+            zone.style.backgroundColor =
+                'rgba(40,122,192,0.09)';
+        });
+
+        zone.addEventListener('dragleave', event => {
+            if (
+                !event.relatedTarget ||
+                !zone.contains(event.relatedTarget)
+            ) {
+                zone.style.borderColor = '#8798ac';
+                zone.style.backgroundColor = '';
+            }
+        });
+
+        zone.addEventListener('drop', event => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            zone.style.borderColor = '#8798ac';
+            zone.style.backgroundColor = '';
+
+            try {
+                const transfer = event.dataTransfer;
+                let dropped = Array.from(transfer?.files || []);
+
+                // Firefox/browser fallback for file drag sources.
+                if (!dropped.length && transfer?.items) {
+                    dropped = Array.from(transfer.items)
+                        .filter(item => item.kind === 'file')
+                        .map(item => item.getAsFile())
+                        .filter(Boolean);
+                }
+
+                if (!dropped.length) {
+                    throw new Error(
+                        'No file received. Drop a file from your file manager.'
+                    );
+                }
+
+                const alreadySelected = dropped.every(file =>
+                    selected.some(old =>
+                        old.name === file.name &&
+                        old.size === file.size &&
+                        old.lastModified === file.lastModified
+                    )
+                );
+
+                if (alreadySelected) {
+                    window.alert(
+                        'File already selected. No duplicate added.'
+                    );
+                    return;
+                }
+
+                addFiles(dropped, true);
+            } catch (error) {
+                window.alert(error.message);
+            }
+        }, true);
+
+        renderList();
+
+        return {
+            clear: () => {
+                selected = [];
+                sync(true);
+            }
+        };
+    }
+
+    const imageAttachments = installIntakeAttachmentDropZone(
+        photo,
+        browse,
+        filename,
+        'Drop JPG/PNG images here, or use Browse Image',
+        ['.jpg', '.jpeg', '.png']
+    );
+
+    const pdfAttachments = installIntakeAttachmentDropZone(
+        pdf,
+        document.getElementById('browseInformationSheet'),
+        pdfName,
+        'Drop PDF/JPG/PNG files here, or use Choose File',
+        ['.pdf', '.jpg', '.jpeg', '.png']
+    );
+
+    window.pdiIntakeClearAttachments = () => {
+        imageAttachments.clear();
+        pdfAttachments.clear();
+    };
+
+
 
     // OCR always takes priority over previously loaded references.
     const originalImport = window.pdiIntakeApplyBoxLabelData;

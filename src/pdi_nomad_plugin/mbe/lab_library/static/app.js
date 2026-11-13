@@ -1043,8 +1043,14 @@ function parseHolderId(id) {
 }
 
 function parseInsertId(id) {
-    const match = String(id || '').match(/^([A-Z][A-Z0-9]*)(\d+)_(\d+(?:\.\d+)?)$/);
-    return match ? {family:match[1], number:Number(match[2]), size:Number(match[3])} : null;
+    const match = String(id || '').match(
+        /^([A-Z][A-Z0-9]*?)([1-9]\d*)_(?:(\d+(?:\.\d+)?)(?:x(\d+(?:\.\d+)?))?|R(\d+(?:\.\d+)?)(?:_A(\d+(?:\.\d+)?))?)$/
+    );
+    return match ? {
+        family: match[1],
+        number: Number(match[2]),
+        size: match[3] ? Number(match[3]) : null
+    } : null;
 }
 
 function nextSequentialId(prefix, items) {
@@ -1205,14 +1211,85 @@ function generatedId() {
     }
 
     if (currentType === 'insert') {
+        // Existing archive identity is preserved while editing.
+        if (editorMode === 'edit' && editorItem?.data?.lab_id) {
+            return editorItem.data.lab_id;
+        }
+
         let family = document.getElementById('insertFamily').value;
         if (family === 'CUSTOM') {
-            family = document.getElementById('insertFamilyCustom').value.trim().toUpperCase();
+            family = document.getElementById('insertFamilyCustom')
+                .value.trim().toUpperCase();
             if (!/^[A-Z][A-Z0-9]*$/.test(family)) return 'INVALID_FAMILY';
         }
-        const number = Number(document.getElementById('insertNumber').value || 1);
-        const opening = selectedSquareSize('insertInnerSize', 'insertInnerCustom');
-        return family + String(number) + '_' + formatNumber(opening);
+
+        const number = Number(document.getElementById('insertNumber').value);
+        if (!Number.isInteger(number) || number < 1 || number > 999) {
+            return '—';
+        }
+
+        const shape = document.getElementById(
+            'insertInnerGeometryType'
+        )?.value;
+        const extras = document.getElementById(
+            'insertInnerGeometryExtras'
+        );
+
+        function dimension(field) {
+            const raw = extras?.querySelector('.insert-' + field)?.value;
+            if (raw == null || String(raw).trim() === '') return NaN;
+            const n = Number(raw);
+            return Number.isFinite(n) && n > 0 ? n : NaN;
+        }
+
+        let geometry = '';
+
+        if (shape === 'RectangleCuboid') {
+            const width = dimension('width');
+            const length = dimension('length');
+            if (Number.isFinite(width) && Number.isFinite(length)) {
+                geometry = formatNumber(width) + 'x' + formatNumber(length);
+            }
+        } else if (shape === 'SquareCuboid') {
+            const side = selectedSquareSize(
+                'insertInnerSize', 'insertInnerCustom'
+            );
+            if (Number.isFinite(side) && side > 0) {
+                geometry = formatNumber(side) + 'x' + formatNumber(side);
+            }
+        } else if (shape === 'Cylinder' ||
+                   shape === 'CylinderSector') {
+            const radius = dimension('radius');
+            const angle = dimension('angle');
+            if (Number.isFinite(radius)) {
+                geometry = 'R' + formatNumber(radius);
+                if (shape === 'CylinderSector') {
+                    geometry = Number.isFinite(angle) && angle <= 360
+                        ? geometry + '_A' + formatNumber(angle)
+                        : '';
+                }
+            }
+        } else if (shape === 'keep' && editorItem?.data?.inner_geometry) {
+            const old = editorItem.data.inner_geometry;
+            const type = String(old.m_def || '').split('.').pop();
+            if (type === 'RectangleCuboid' || type === 'SquareCuboid') {
+                const width = Number(old.width) * 1000;
+                const length = Number(old.length) * 1000;
+                if (width > 0 && length > 0) {
+                    geometry = formatNumber(width) + 'x' + formatNumber(length);
+                }
+            } else if (type === 'Cylinder' || type === 'CylinderSector') {
+                const radius = Number(old.radius) * 1000;
+                if (radius > 0) {
+                    geometry = 'R' + formatNumber(radius);
+                    if (type === 'CylinderSector') {
+                        geometry += '_A' + formatNumber(old.central_angle);
+                    }
+                }
+            }
+        }
+
+        return geometry ? family + String(number) + '_' + geometry : '—';
     }
     return '—';
 }
@@ -3663,7 +3740,7 @@ function installInsertGeometryUi() {
 
         base.parentElement.insertAdjacentHTML('beforebegin', `
             <div>
-                <label for="${id}">${side} geometry</label>
+                <label for="${id}">Shape</label>
                 <select id="${id}">
                     <option value="">Select geometry</option>
                     <option value="RectangleCuboid">Rectangle</option>
@@ -3724,16 +3801,27 @@ function updateInsertGeometryUi(side) {
     const round = type === 'Cylinder' || type === 'CylinderSector';
 
     document.getElementById('insert' + side + 'Size')
-        .parentElement.classList.toggle('hidden', !rectangular);
+        .parentElement.classList.toggle('hidden', type !== 'SquareCuboid');
 
-    if (!rectangular) {
+    if (type !== 'SquareCuboid') {
         document.getElementById('insert' + side + 'CustomWrap')
             .classList.add('hidden');
     }
 
+    // Rectangle dimensions are independent of square presets.
+    if (!extras.querySelector('[data-kind="width"]')) {
+        const lengthField = extras.querySelector('[data-kind="length"]');
+        lengthField.insertAdjacentHTML(
+            'beforebegin',
+            '<div data-kind="width"><label>Width (mm)</label>' +
+            '<input class="insert-width" type="number" ' +
+            'min="0.001" step="any"></div>'
+        );
+    }
+
     const visible = {
         radius: round,
-        length: type === 'RectangleCuboid',
+        width: type === 'RectangleCuboid', length: type === 'RectangleCuboid',
         angle: type === 'CylinderSector',
         height: rectangular || round
     };
@@ -3772,6 +3860,13 @@ function loadInsertGeometryUi(side, geometry) {
     }
 
     updateInsertGeometryUi(side);
+    const widthInput = extras.querySelector('.insert-width');
+    if (widthInput) {
+        const savedWidth = geometry?.width;
+        widthInput.value = savedWidth == null
+            ? ''
+            : String(Number(savedWidth) * 1000);
+    }
 }
 
 function readInsertGeometryUi(side, previous) {
@@ -3817,17 +3912,19 @@ function readInsertGeometryUi(side, previous) {
             result.central_angle = angle;
         }
     } else {
-        const width = selectedSquareSize(
-            'insert' + side + 'Size',
-            'insert' + side + 'Custom'
-        );
+        const width = type === 'SquareCuboid'
+            ? selectedSquareSize(
+                'insert' + side + 'Size',
+                'insert' + side + 'Custom'
+            )
+            : value('width', true);
         if (!Number.isFinite(width) || width <= 0) {
             throw new Error(side + ': invalid width.');
         }
         result.width = width / 1000;
         result.length = type === 'SquareCuboid'
             ? width / 1000
-            : (value('length', false) || width) / 1000;
+            : value('length', true) / 1000;
     }
 
     const height = value('height', false);
@@ -3893,10 +3990,10 @@ function populateEditor(data) {
             // 10x10 mm cross: A center, B right, C below, D left, E above.
             [
                 {name:'A', x_position:0, y_position:0},
-                {name:'B', x_position:0.01, y_position:0},
-                {name:'C', x_position:0, y_position:-0.01},
-                {name:'D', x_position:-0.01, y_position:0},
-                {name:'E', x_position:0, y_position:0.01},
+                {name:'B', x_position:0.02, y_position:0},
+                {name:'C', x_position:0, y_position:-0.02},
+                {name:'D', x_position:-0.02, y_position:0},
+                {name:'E', x_position:0, y_position:0.02},
             ].forEach(addHolderPosition);
         }
     }
